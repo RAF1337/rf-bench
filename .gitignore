@@ -1,0 +1,5 @@
+results/
+*.app
+.alpackages/
+.output/
+.superpowers/
