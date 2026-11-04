@@ -14,8 +14,12 @@ tasks/T001/
     tests/               functional and Budget_ tests (app.json required)
     checks.json          required
     variants/bad/        deliberately wrong solution (required by the validator)
+      expected-failures.json
     variants/alt/        alternative correct solution (required by the validator)
 ```
+
+`variants/bad` and `variants/alt` are complete apps (`app.json` plus source) with the same app id
+as `solution/app`.
 
 ## task.json
 
@@ -41,3 +45,22 @@ An array of `{ "check": "<name>", "category": "<category>", "params": { ... } }`
 ## Loader errors
 
 `Get-BenchTask` throws `"<taskId>: <problem>"` for any violation above.
+
+## Validation
+
+`pwsh src/Test-Task.ps1 -Task Tnnn` grades the task's apps with the real grader (container and
+compiler folder required) and checks that:
+
+- `solution/app` is fully right;
+- `solution/variants/alt` is fully right;
+- `solution/variants/bad` compiles and passes all functional tests, and the checks that fail are
+  exactly the ones in `variants/bad/expected-failures.json`. Its budget results are reported but
+  not required, because a planted standards violation may legitimately cost SQL;
+- for `bugfix` and `feature` tasks, `assignment/app` is not fully right.
+
+`expected-failures.json` is a non-empty JSON array of check names, each one listed in
+`checks.json`, for example `["RequiresSetLoadFieldsBeforeRead", "NoFindMinus"]`.
+
+Exit codes: 0 valid, 1 task invalid, 2 validator error (configuration, Docker, compiler or grader
+infrastructure). Each graded app uses its own grader folder under `<TempRoot>\validate\<taskId>`.
+Pass `-SwitchDocker` to switch Docker to Windows containers for the run and back to Linux after.

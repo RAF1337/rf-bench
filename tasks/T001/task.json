@@ -1,0 +1,9 @@
+{
+  "id": "T001",
+  "title": "Credit exposure total includes blocked customers",
+  "type": "bugfix",
+  "difficulty": "medium",
+  "area": "Sales / credit management",
+  "categories": ["data-access"],
+  "timeoutMinutes": 30
+}

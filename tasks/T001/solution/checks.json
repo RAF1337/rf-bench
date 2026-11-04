@@ -1,0 +1,12 @@
+[
+  {
+    "check": "RequiresSetLoadFieldsBeforeRead",
+    "category": "data-access",
+    "params": { "tables": ["Customer"], "checkFieldCoverage": true }
+  },
+  {
+    "check": "NoFindMinus",
+    "category": "data-access",
+    "params": {}
+  }
+]
