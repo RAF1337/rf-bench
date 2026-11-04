@@ -73,9 +73,43 @@ Describe 'Test-TranscriptLeak' {
         $t = New-Transcript @((Use-Tool 'Read' @{ file_path = 'C:\Temp\rf-bench\run1\T001\1\ws\app\src\X.al' }), (Tool-Result 'table 50100 Foo'))
         (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Leaked | Should -BeFalse
     }
-    It 'tolerates malformed lines' {
+    It 'fails closed on unparseable lines' {
         $p = Join-Path $TestDrive 'bad.jsonl'
-        Set-Content $p @('not json', '{"type":"assistant"}')
-        (Test-TranscriptLeak $p $script:Cfg $script:Task $script:Grader).Leaked | Should -BeFalse
+        Set-Content $p @('not json', '{"type":"assistant"}', '')
+        $r = Test-TranscriptLeak $p $script:Cfg $script:Task $script:Grader
+        $r.ParseErrors | Should -Be 1
+        $r.Leaked | Should -BeTrue
+        $r.Hits.Pattern | Should -Contain 'unparseable-transcript'
+    }
+    It 'reports zero ParseErrors for a clean transcript' {
+        $t = New-Transcript @((Use-Tool 'Bash' @{ command = 'ls' }))
+        (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).ParseErrors | Should -Be 0
+    }
+    It 'throws when the task has no test codeunit names' {
+        $empty = Join-Path $TestDrive 'emptytests'; New-Item -ItemType Directory -Force $empty | Out-Null
+        $t = New-Transcript @((Use-Tool 'Bash' @{ command = 'ls' }))
+        { Test-TranscriptLeak $t $script:Cfg ([pscustomobject]@{ Id = 'T009'; TestsDir = $empty }) $script:Grader } | Should -Throw 'T009: no test codeunit names found in*'
+        { Test-TranscriptLeak $t $script:Cfg ([pscustomobject]@{ Id = 'T009'; TestsDir = (Join-Path $TestDrive 'nope') }) $script:Grader } | Should -Throw '*T009*'
+    }
+    It 'flags bare _grader segment (<name>)' -ForEach @(
+        @{ name = 'relative'; cmd = 'cat ..\..\..\_grader\x\out.txt' }
+        @{ name = 'env var'; cmd = 'ls $env:TEMP\rf-bench\r\_grader' }
+        @{ name = 'casing'; cmd = 'ls /tmp/_GRADER/x' }
+    ) {
+        $t = New-Transcript @(Use-Tool 'PowerShell' @{ command = $cmd })
+        (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Hits.Kind | Should -Contain 'grader-segment'
+    }
+    It 'flags /mnt/c form of the grader dir' {
+        $t = New-Transcript @(Use-Tool 'Bash' @{ command = 'ls /mnt/c/Temp/rf-bench/run1/_grader/T001/1' })
+        (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Hits.Kind | Should -Contain 'grader-dir'
+    }
+    It 'does not flag _grader embedded in a longer name' {
+        $t = New-Transcript @(Use-Tool 'Bash' @{ command = 'ls my_grader_notes' })
+        (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Leaked | Should -BeFalse
+    }
+    It 'takes the excerpt from the original text' {
+        $t = New-Transcript @(Use-Tool 'Bash' @{ command = 'cat C:\\GeneralDev\\AL\\rf-bench\\README.md' })
+        (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Hits[0].Excerpt | Should -BeLike 'cat C:\\GeneralDev\\AL*'
     }
 }
+

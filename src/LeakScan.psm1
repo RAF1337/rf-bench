@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 
 # Collects every string inside tool_use inputs and tool_result contents of a stream-json transcript.
 # Prompt text, assistant prose and system events are deliberately ignored.
-function Get-TranscriptToolText([string]$Path) {
+function Get-TranscriptToolText([string]$Path, [ref]$ParseErrors) {
     $out = [System.Collections.Generic.List[object]]::new()
     $walk = {
         param($node, $tool, $kind)
@@ -18,9 +18,10 @@ function Get-TranscriptToolText([string]$Path) {
         }
     }
     $names = @{}
+    $ParseErrors.Value = 0
     foreach ($line in [IO.File]::ReadLines($Path)) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try { $ev = $line | ConvertFrom-Json -Depth 50 } catch { continue }
+        try { $ev = $line | ConvertFrom-Json -Depth 50 } catch { $ParseErrors.Value++; continue }
         if ($null -eq $ev -or -not $ev.PSObject.Properties['message'] -or $null -eq $ev.message) { continue }
         $msg = $ev.message
         if (-not $msg.PSObject.Properties['content'] -or $msg.content -isnot [System.Collections.IEnumerable] -or $msg.content -is [string]) { continue }
@@ -44,6 +45,20 @@ function ConvertTo-FlatPath([string]$s) {
     ([regex]::Replace($s.Replace('\', '/'), '/{2,}', '/')).ToLowerInvariant()
 }
 
+# Same as ConvertTo-FlatPath, plus for every flat char the index of its source char in the original.
+function ConvertTo-FlatMap([string]$s) {
+    $sb = [System.Text.StringBuilder]::new($s.Length)
+    $map = [System.Collections.Generic.List[int]]::new($s.Length)
+    $prevSlash = $false
+    for ($i = 0; $i -lt $s.Length; $i++) {
+        $c = $s[$i]
+        if ($c -eq '\') { $c = '/' }
+        if ($c -eq '/') { if ($prevSlash) { continue }; $prevSlash = $true } else { $prevSlash = $false }
+        [void]$sb.Append([char]::ToLowerInvariant($c)); $map.Add($i)
+    }
+    [pscustomobject]@{ Flat = $sb.ToString(); Map = $map }
+}
+
 # All textual spellings of a drive path: c:/x, /c/x (Git Bash), /mnt/c/x (WSL).
 function Get-PathForms([string]$Path) {
     $flat = (ConvertTo-FlatPath $Path).TrimEnd('/')
@@ -58,7 +73,7 @@ function Get-PathForms([string]$Path) {
 
 function Get-TestCodeunitNames($Task) {
     $names = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    if (-not $Task -or -not $Task.TestsDir -or -not (Test-Path -LiteralPath $Task.TestsDir)) { return @() }
+    if (-not $Task -or -not $Task.TestsDir -or -not (Test-Path -LiteralPath $Task.TestsDir)) { throw "$($Task.Id): no test codeunit names found in $($Task.TestsDir)" }
     foreach ($f in Get-ChildItem -LiteralPath $Task.TestsDir -Recurse -File -Filter *.al) {
         foreach ($l in [IO.File]::ReadLines($f.FullName)) {
             if ($l -match '^\s*codeunit\s+\d+\s+(?:"([^"]+)"|([A-Za-z_][\w]*))') {
@@ -67,6 +82,7 @@ function Get-TestCodeunitNames($Task) {
             }
         }
     }
+    if ($names.Count -eq 0) { throw "$($Task.Id): no test codeunit names found in $($Task.TestsDir)" }
     @($names)
 }
 
@@ -97,6 +113,7 @@ function Test-TranscriptLeak {
         }
         if ($cur) { & $add 'grader-root' @($cur) }
     }
+    $patterns.Add([pscustomobject]@{ Kind = 'grader-segment'; Pattern = '_grader'; Flat = $true; Regex = [regex]'(^|/)_grader(/|$)' })
     $patterns.Add([pscustomobject]@{ Kind = 'solution-folder'; Pattern = '/solution/'; Flat = $true })
     foreach ($n in Get-TestCodeunitNames $Task) {
         $patterns.Add([pscustomobject]@{ Kind = 'test-codeunit'; Pattern = $n.ToLowerInvariant(); Flat = $false })
@@ -104,20 +121,29 @@ function Test-TranscriptLeak {
 
     $hits = [System.Collections.Generic.List[object]]::new()
     $seen = [System.Collections.Generic.HashSet[string]]::new()
-    foreach ($t in Get-TranscriptToolText $TranscriptPath) {
-        $flat = ConvertTo-FlatPath $t.Text
+    $parseErrors = 0
+    foreach ($t in Get-TranscriptToolText $TranscriptPath ([ref]$parseErrors)) {
+        $fm = ConvertTo-FlatMap $t.Text
+        $flat = $fm.Flat
         $lower = $t.Text.ToLowerInvariant()
         foreach ($p in $patterns) {
             $hay = if ($p.Flat) { $flat } else { $lower }
-            $i = $hay.IndexOf($p.Pattern, [StringComparison]::Ordinal)
+            $re = if ($p.PSObject.Properties['Regex']) { $p.Regex } else { $null }
+            if ($re) { $m = $re.Match($hay); $i = if ($m.Success) { $m.Index } else { -1 } }
+            else { $i = $hay.IndexOf($p.Pattern, [StringComparison]::Ordinal) }
             if ($i -lt 0) { continue }
             if (-not $seen.Add("$($p.Kind)|$($p.Pattern)|$($t.Tool)|$($t.Kind)")) { continue }
-            $start = [Math]::Max(0, $i - 40)
-            $excerpt = $hay.Substring($start, [Math]::Min(120, $hay.Length - $start))
+            $oi = if ($p.Flat) { $fm.Map[$i] } else { $i }
+            $start = [Math]::Max(0, $oi - 40)
+            $excerpt = $t.Text.Substring($start, [Math]::Min(120, $t.Text.Length - $start))
             $hits.Add([pscustomobject]@{ Kind = $p.Kind; Pattern = $p.Pattern; Tool = $t.Tool; Source = $t.Kind; Excerpt = $excerpt })
         }
     }
-    [pscustomobject]@{ Leaked = ($hits.Count -gt 0); Hits = @($hits) }
+    if ($parseErrors -gt 0) {
+        $hits.Add([pscustomobject]@{ Kind = 'parse-error'; Pattern = 'unparseable-transcript'; Tool = ''; Source = 'transcript'; Excerpt = "$parseErrors unparseable line(s)" })
+    }
+    [pscustomobject]@{ Leaked = ($hits.Count -gt 0); Hits = @($hits); ParseErrors = $parseErrors }
 }
 
 Export-ModuleMember -Function Test-TranscriptLeak
+
