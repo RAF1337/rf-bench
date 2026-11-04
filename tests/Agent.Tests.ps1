@@ -127,14 +127,51 @@ Describe 'ConvertFrom-ClaudeStream' {
         $r.ToolUses[0].Tool | Should -Be 'Agent'
     }
 
-    It 'returns empty metrics for an empty transcript' {
+    It 'marks an empty transcript as aborted/no-result' {
         $p = Join-Path $TestDrive 'empty.jsonl'
         Set-Content -LiteralPath $p -Value '' -NoNewline
         $r = ConvertFrom-ClaudeStream $p
         $r.SessionId | Should -BeNullOrEmpty
-        $r.Status | Should -Be 'ok'
+        $r.Status | Should -Be 'aborted'
+        $r.AbortReason | Should -Be 'no-result'
         $r.CostUsd | Should -BeNullOrEmpty
         @($r.ToolUses).Count | Should -Be 0
+    }
+
+    It 'marks a stream without a result event as aborted/no-result' {
+        $p = New-Stream 'noresult.jsonl' @(
+            @{ type = 'system'; subtype = 'init'; session_id = 's1'; claude_code_version = '2.1.318'; model = 'm'; mcp_servers = @() }
+            @{ type = 'assistant'; parent_tool_use_id = $null; message = @{ content = @(@{ type = 'tool_use'; id = 'a'; name = 'Bash'; input = @{} }) } }
+        )
+        $r = ConvertFrom-ClaudeStream $p
+        $r.SessionId | Should -Be 's1'
+        $r.Status | Should -Be 'aborted'
+        $r.AbortReason | Should -Be 'no-result'
+        ($r.ToolUses | Where-Object Tool -EQ 'Bash').Count | Should -Be 1
+    }
+
+    It 'maps a missing result after a final <Err> retry to rate-limit' -TestCases @(
+        @{ Err = 'rate_limit' }, @{ Err = 'overloaded' }
+    ) {
+        $p = New-Stream 'noresult-retry.jsonl' @(
+            @{ type = 'system'; subtype = 'init'; session_id = 's1'; claude_code_version = '2.1.318'; model = 'm'; mcp_servers = @() }
+            @{ type = 'system'; subtype = 'api_retry'; attempt = 3; error_status = 429; error = $Err; session_id = 's1' }
+        )
+        $r = ConvertFrom-ClaudeStream $p
+        $r.Status | Should -Be 'aborted'
+        $r.AbortReason | Should -Be 'rate-limit'
+    }
+
+    It 'ignores a rate-limit retry that was followed by assistant output' {
+        $p = New-Stream 'stale-retry.jsonl' @(
+            @{ type = 'system'; subtype = 'init'; session_id = 's1'; claude_code_version = '2.1.318'; model = 'm'; mcp_servers = @() }
+            @{ type = 'system'; subtype = 'api_retry'; attempt = 1; error_status = 429; error = 'rate_limit'; session_id = 's1' }
+            @{ type = 'assistant'; parent_tool_use_id = $null; message = @{ content = @(@{ type = 'text'; text = 'working' }) } }
+            @{ type = 'result'; subtype = 'error_max_turns'; is_error = $true; session_id = 's1'; total_cost_usd = 1; num_turns = 60; duration_ms = 10 }
+        )
+        $r = ConvertFrom-ClaudeStream $p
+        $r.Status | Should -Be 'ok'
+        $r.AbortReason | Should -BeNullOrEmpty
     }
 
     It 'throws for a missing transcript' {
@@ -283,6 +320,28 @@ Start-Sleep 300
         $childPid = [int](Get-Content $childFile)
         Get-Process -Id $stubPid -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
         Get-Process -Id $childPid -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+    }
+
+    It 'times out (no hang, no throw) when the child never reads a long stdin prompt' {
+        # Stub ignores stdin and sleeps; a >24k prompt overflows the pipe buffer. The last
+        # stream event is a rate-limit retry, so this also checks timeout > rate-limit.
+        $body = @'
+[Console]::Out.WriteLine('{"type":"system","subtype":"init","session_id":"stub-stdin","claude_code_version":"9.9.9","model":"m","mcp_servers":[]}')
+[Console]::Out.WriteLine('{"type":"system","subtype":"api_retry","attempt":1,"error_status":429,"error":"rate_limit","session_id":"stub-stdin"}')
+[Console]::Out.Flush()
+Start-Sleep 300
+'@
+        $cmd = New-Stub 'nostdin-stub.ps1' $body
+        $t = Join-Path $TestDrive 'nostdin.jsonl'
+        $long = 'y' * 200000
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $r = Invoke-ClaudeAttempt -Env @{} -Ws $script:Ws -Prompt $long -Model 'm' -MaxTurns 1 -TimeoutMinutes 0.05 `
+            -McpConfigPath 'c.json' -McpMode 'strict' -ResumeSessionId '' -TranscriptPath $t -ClaudeCommand $cmd
+        $sw.Stop()
+        $r.Status | Should -Be 'aborted'
+        $r.AbortReason | Should -Be 'timeout'
+        $r.SessionId | Should -Be 'stub-stdin'
+        $sw.Elapsed.TotalSeconds | Should -BeLessThan 60
     }
 
     It 'throws when the workspace does not exist' {

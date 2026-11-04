@@ -39,6 +39,8 @@ function ConvertFrom-ClaudeStream {
         if ($type -eq 'system' -and $subtype -eq 'init') { if ($null -eq $init) { $init = $e } }
         elseif ($type -eq 'system' -and $subtype -eq 'api_retry') { $lastRetryError = [string](Get-Prop $e 'error') }
         elseif ($type -eq 'assistant') {
+            # A retry followed by model output was recovered; only a trailing retry counts.
+            $lastRetryError = $null
             foreach ($block in @(Get-Prop (Get-Prop $e 'message') 'content')) {
                 if ((Get-Prop $block 'type') -ne 'tool_use') { continue }
                 $name = [string](Get-Prop $block 'name')
@@ -58,9 +60,15 @@ function ConvertFrom-ClaudeStream {
     $isError = [bool](Get-Prop $result 'is_error')
     $status = 'ok'
     $reason = $null
-    if ($isError) {
+    $retryRateLimited = $lastRetryError -in 'rate_limit', 'overloaded'
+    # Precedence: rate-limit > no-result (the caller sets 'timeout' above both).
+    if ($null -eq $result) {
+        $status = 'aborted'
+        $reason = $(if ($retryRateLimited) { 'rate-limit' } else { 'no-result' })
+    }
+    elseif ($isError) {
         $text = @([string](Get-Prop $result 'result')) + @(Get-Prop $result 'errors' | ForEach-Object { [string]$_ })
-        if (($text -join "`n") -match $script:RateLimitPattern -or $lastRetryError -in 'rate_limit', 'overloaded') {
+        if (($text -join "`n") -match $script:RateLimitPattern -or $retryRateLimited) {
             $status = 'aborted'; $reason = 'rate-limit'
         }
     }
@@ -168,23 +176,41 @@ function Invoke-ClaudeAttempt {
         # Raw byte copies: stdout goes to the transcript unchanged, stderr to a side file.
         $outCopy = $proc.StandardOutput.BaseStream.CopyToAsync($out)
         $errCopy = $proc.StandardError.BaseStream.CopyToAsync($err)
+        # A long prompt goes to stdin asynchronously: a child that never reads stdin must not
+        # block the runner, so WaitForExit(timeout) stays the only blocking call.
+        $stdin = $proc.StandardInput.BaseStream
+        $write = $null
         if ($Prompt.Length -gt $script:MaxArgPromptLength) {
             $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Prompt)
-            $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+            try { $write = $stdin.WriteAsync($bytes, 0, $bytes.Length) }
+            catch { Write-Verbose "stdin write failed: $($_.Exception.Message)" }
         }
-        $proc.StandardInput.Close()
-
-        if (-not $proc.WaitForExit([int][Math]::Ceiling($TimeoutMinutes * 60000))) {
-            $timedOut = $true
+        $stdinOpen = $true
+        $timeoutMs = [long][Math]::Ceiling($TimeoutMinutes * 60000)
+        while ($true) {
+            # Close stdin (EOF for claude -p) once the write is done or failed.
+            if ($stdinOpen -and ($null -eq $write -or $write.IsCompleted)) {
+                try { $stdin.Close() } catch { Write-Verbose "stdin close failed: $($_.Exception.Message)" }
+                $stdinOpen = $false
+            }
+            $remaining = $timeoutMs - $sw.ElapsedMilliseconds
+            if ($remaining -le 0) { $timedOut = $true; break }
+            $slice = $(if ($stdinOpen) { [Math]::Min($remaining, 200) } else { $remaining })
+            if ($proc.WaitForExit([int]$slice)) { break }
+        }
+        if ($timedOut) {
             try { $proc.Kill($true) } catch { Write-Verbose "kill failed: $($_.Exception.Message)" }
             $null = $proc.WaitForExit(30000)
         }
-        else { $proc.WaitForExit() }  # flushes async readers
         # Grandchildren may still hold the pipes; do not wait for them forever.
-        $null = [Threading.Tasks.Task]::WaitAll(@($outCopy, $errCopy), 30000)
+        try { $null = [Threading.Tasks.Task]::WaitAll(@($outCopy, $errCopy), 30000) }
+        catch { Write-Verbose "output copy failed: $($_.Exception.Message)" }
     }
     finally {
         $sw.Stop()
+        # Never leave a child running if anything above threw.
+        if ($proc -and -not $proc.HasExited) { try { $proc.Kill($true) } catch { Write-Verbose "kill failed: $($_.Exception.Message)" } }
+        if ($proc) { try { $proc.StandardInput.Dispose() } catch { Write-Verbose "stdin dispose failed: $($_.Exception.Message)" } }
         $out.Dispose()
         $err.Dispose()
     }
