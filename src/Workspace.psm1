@@ -340,9 +340,16 @@ function New-AgentSettings {
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)][Alias('Profile')]$HarnessProfile, [Parameter(Mandatory)]$Workspace)
 
     $path = Join-Path $Workspace.Ws '.claude\settings.json'
+    # The agent can edit workspace files through a shell between attempts, so the settings are
+    # always rebuilt from the profile's own copy, and a settings.local.json (which would be
+    # merged over them) is removed.
+    $local = Join-Path $Workspace.Ws '.claude\settings.local.json'
+    if (Test-Path -LiteralPath $local) { Remove-Item -LiteralPath $local -Force }
+    $profileDir = [string](Get-Prop $HarnessProfile 'Dir')
+    $source = if ($profileDir) { Join-Path $profileDir 'project\.claude\settings.json' } else { $null }
     $s = [ordered]@{}
-    if (Test-Path -LiteralPath $path) {
-        try { $s = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable }
+    if ($source -and (Test-Path -LiteralPath $source)) {
+        try { $s = Get-Content -LiteralPath $source -Raw | ConvertFrom-Json -AsHashtable }
         catch { throw "profile $($HarnessProfile.Name): invalid JSON in project/.claude/settings.json ($($_.Exception.Message))" }
         if ($null -eq $s) { $s = [ordered]@{} }
     }

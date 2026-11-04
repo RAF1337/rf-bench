@@ -87,6 +87,18 @@ Describe 'Get-BenchTask' {
         $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'assignment\app\app.json') { param($o) $o.id = '33333333-3333-3333-3333-333333333333' } }
         { Get-BenchTask $p } | Should -Throw 'TX01: *app id*'
     }
+    It 'rejects a wrongly cased type' {
+        $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.type = 'Bugfix' } }
+        { Get-BenchTask $p } | Should -Throw 'TX01: *Bugfix*'
+    }
+    It 'rejects a wrongly cased task category' {
+        $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.categories = @('Data-Access') } }
+        { Get-BenchTask $p } | Should -Throw 'TX01: *Data-Access*'
+    }
+    It 'rejects a wrongly cased checks.json category' {
+        $p = New-TaskCopy { param($t) '[{"check":"NoCommitIn","category":"Transactions","params":{}}]' | Set-Content (Join-Path $t 'solution\checks.json') }
+        { Get-BenchTask $p } | Should -Throw 'TX01: *Transactions*'
+    }
     It 'throws on invalid type' {
         $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.type = 'weird' } }
         { Get-BenchTask $p } | Should -Throw 'TX01: *type*'

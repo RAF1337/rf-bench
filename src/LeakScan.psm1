@@ -115,8 +115,10 @@ function Test-TranscriptLeak {
     }
     $patterns.Add([pscustomobject]@{ Kind = 'grader-segment'; Pattern = '_grader'; Flat = $true; Regex = [regex]'(^|/)_grader(/|$)' })
     $patterns.Add([pscustomobject]@{ Kind = 'solution-folder'; Pattern = '/solution/'; Flat = $true })
+    # Test codeunit names are matched in tool_result content only: feedback hands failing test
+    # names to the agent, so searching for them (tool_use input) is legitimate.
     foreach ($n in Get-TestCodeunitNames $Task) {
-        $patterns.Add([pscustomobject]@{ Kind = 'test-codeunit'; Pattern = $n.ToLowerInvariant(); Flat = $false })
+        $patterns.Add([pscustomobject]@{ Kind = 'test-codeunit'; Pattern = $n.ToLowerInvariant(); Flat = $false; OnlyIn = 'tool_result' })
     }
 
     $hits = [System.Collections.Generic.List[object]]::new()
@@ -127,6 +129,7 @@ function Test-TranscriptLeak {
         $flat = $fm.Flat
         $lower = $t.Text.ToLowerInvariant()
         foreach ($p in $patterns) {
+            if ($p.PSObject.Properties['OnlyIn'] -and $p.OnlyIn -ne $t.Kind) { continue }
             $hay = if ($p.Flat) { $flat } else { $lower }
             $re = if ($p.PSObject.Properties['Regex']) { $p.Regex } else { $null }
             if ($re) { $m = $re.Match($hay); $i = if ($m.Success) { $m.Index } else { -1 } }

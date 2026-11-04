@@ -265,6 +265,16 @@ Describe 'Publish-BenchApp and Remove-BenchApp' {
         Should -Invoke UnPublish-BcContainerApp -ModuleName Backend.Docker -Times 1 -Exactly -ParameterFilter { $version -eq '1.0.0.0' -and -not $unInstall }
         Should -Invoke UnPublish-BcContainerApp -ModuleName Backend.Docker -Times 1 -Exactly -ParameterFilter { $version -eq '1.0.0.1' -and $unInstall }
     }
+    It 'emits nothing on the pipeline when the BcContainerHelper commands emit objects' {
+        $cfg = New-TestConfig
+        Mock Publish-BcContainerApp -ModuleName Backend.Docker { [pscustomobject]@{ Noise = 'publish' }; 'publish text' }
+        Mock Get-BcContainerAppInfo -ModuleName Backend.Docker {
+            [pscustomobject]@{ AppId = [guid]'11111111-2222-3333-4444-555555555555'; Name = 'TX App'; Publisher = 'rf'; Version = '1.0.0.0'; IsInstalled = $true }
+        }
+        Mock UnPublish-BcContainerApp -ModuleName Backend.Docker { [pscustomobject]@{ Noise = 'unpublish' } }
+        @(Publish-BenchApp $cfg -AppFile 'C:\x\a.app').Count | Should -Be 0
+        @(Remove-BenchApp $cfg -AppId $script:AppId).Count | Should -Be 0
+    }
     It 'does nothing when the app is absent' {
         $cfg = New-TestConfig
         Mock Get-BcContainerAppInfo -ModuleName Backend.Docker {
@@ -309,6 +319,15 @@ Describe 'Invoke-BenchTests' {
         $budget.Passed | Should -BeTrue
         $budget.Codeunit | Should -Be '70101 TX Budget Tests'
         Test-Path $xml | Should -BeFalse -Because 'the temporary result file is removed'
+    }
+    It 'returns only test results when the test runner emits objects' {
+        $cfg = New-TestConfig
+        $xml = Join-Path $TestDrive 'xunit-noise.xml'
+        Mock Get-XUnitResultPath -ModuleName Backend.Docker { $xml }
+        Mock Run-TestsInBcContainer -ModuleName Backend.Docker { Copy-Item $script:Sample $XUnitResultFileName; $true; 'runner text' }
+        $tests = @(Invoke-BenchTests $cfg -TestAppId ([guid]::NewGuid()))
+        $tests.Count | Should -Be 3
+        @($tests | Where-Object { $_ -isnot [pscustomobject] -or -not $_.PSObject.Properties['IsBudget'] }).Count | Should -Be 0
     }
     It 'throws when no result file is produced' {
         $cfg = New-TestConfig

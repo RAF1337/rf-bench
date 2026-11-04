@@ -96,11 +96,17 @@ Describe 'Invoke-Grade' {
 
     It 'copies the agent app and the tests into the attempt folder and compiles the app with analyzers' {
         Set-BackendMocks
+        $script:TestsCopied = $false
+        Mock -ModuleName Grader Invoke-BenchTests {
+            $script:Calls.Add("tests:$TestAppId")
+            $script:TestsCopied = Test-Path (Join-Path $script:Grader 'attempt2\tests\app.json')
+            $script:MockTests
+        }
         $agent = New-AgentApp
         $null = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir $agent -GraderDir $script:Grader -Attempt 2
         $att = Join-Path $script:Grader 'attempt2'
         Test-Path (Join-Path $att 'app\src\Starter.Codeunit.al') | Should -BeTrue
-        Test-Path (Join-Path $att 'tests\app.json') | Should -BeTrue
+        $script:TestsCopied | Should -BeTrue
         $script:CompileArgs.Count | Should -Be 2
         $script:CompileArgs[0].AppDir | Should -Be (Join-Path $att 'app')
         $script:CompileArgs[0].Analyzers | Should -BeTrue
@@ -341,6 +347,43 @@ codeunit 50100 Starter
         @($g.Findings | Where-Object { -not $_.Passed } | ForEach-Object Check | Sort-Object -Unique) | Should -Be @('NoCommitIn', 'NoFindMinus')
         $g.ChecksPassed | Should -BeFalse
         $g.FullyRight | Should -BeFalse
+    }
+
+    It 'also removes an agent app whose app.json id differs from the task app id' {
+        Set-BackendMocks
+        $agent = New-AgentApp
+        $newId = '33333333-3333-3333-3333-333333333333'
+        Set-Content (Join-Path $agent 'app.json') "{`"id`":`"$newId`",`"name`":`"TX01 App`",`"publisher`":`"rf`",`"version`":`"1.0.0.0`"}"
+        $null = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir $agent -GraderDir $script:Grader -Attempt 1
+        $script:Calls | Should -Be @(
+            "remove:$script:TestAppId", "remove:$script:AppId", "remove:$newId",
+            'publish:TX01.app', 'publish:TX01.Tests.app',
+            "tests:$script:TestAppId",
+            "remove:$script:TestAppId", "remove:$script:AppId", "remove:$newId"
+        )
+    }
+
+    It 'removes the copied tests and the built test app after grading, keeping the rest' {
+        Set-BackendMocks
+        $null = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
+        $att = Join-Path $script:Grader 'attempt1'
+        Test-Path (Join-Path $att 'tests') | Should -BeFalse
+        Test-Path (Join-Path $att 'out\TX01.Tests.app') | Should -BeFalse
+        Test-Path (Join-Path $att 'out\TX01.app') | Should -BeTrue
+        Test-Path (Join-Path $att 'app\app.json') | Should -BeTrue
+    }
+
+    It 'removes the copied tests when the app does not compile and when grading throws' {
+        Set-BackendMocks
+        Mock -ModuleName Grader Invoke-AlCompile { [pscustomobject]@{ Success = $false; Errors = @('error AL0104: x'); Warnings = @(); AppFile = $null } }
+        $null = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
+        Test-Path (Join-Path $script:Grader 'attempt1\tests') | Should -BeFalse
+
+        Set-BackendMocks
+        Mock -ModuleName Grader Invoke-BenchTests { throw 'runner crashed' }
+        { Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 2 } | Should -Throw '*runner crashed*'
+        Test-Path (Join-Path $script:Grader 'attempt2\tests') | Should -BeFalse
+        Test-Path (Join-Path $script:Grader 'attempt2\out\TX01.Tests.app') | Should -BeFalse
     }
 
     It 'replaces a stale attempt folder' {

@@ -33,11 +33,11 @@ function Get-BenchTask {
     }
     $id = [string]$j.id
     if ($id -cne $folder) { throw "${folder}: task.json id '$id' does not match folder name" }
-    if ($j.type -notin $script:Types) { throw "${id}: invalid type '$($j.type)' (expected $($script:Types -join '|'))" }
-    if ($j.difficulty -notin $script:Difficulties) { throw "${id}: invalid difficulty '$($j.difficulty)'" }
+    if ($j.type -cnotin $script:Types) { throw "${id}: invalid type '$($j.type)' (expected $($script:Types -join '|'))" }
+    if ($j.difficulty -cnotin $script:Difficulties) { throw "${id}: invalid difficulty '$($j.difficulty)'" }
     $cats = @($j.categories)
     foreach ($c in $cats) {
-        if ($c -notin $script:Categories) { throw "${id}: unknown category '$c' in task.json" }
+        if ($c -cnotin $script:Categories) { throw "${id}: unknown category '$c' in task.json" }
     }
     $timeout = Get-Prop $j 'timeoutMinutes'
     if ($null -ne $timeout -and ($timeout -isnot [int] -and $timeout -isnot [long] -or $timeout -le 0)) {
@@ -81,7 +81,7 @@ function Get-BenchTask {
         $chk = Get-Prop $s 'check'
         $cat = Get-Prop $s 'category'
         if ($chk -notin $knownChecks) { throw "${id}: unknown check '$chk' in checks.json" }
-        if ($cat -notin $script:Categories) { throw "${id}: unknown category '$cat' in checks.json (check '$chk')" }
+        if ($cat -cnotin $script:Categories) { throw "${id}: unknown category '$cat' in checks.json (check '$chk')" }
     }
 
     $bad = Join-Path $root 'solution\variants\bad'

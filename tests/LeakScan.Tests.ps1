@@ -44,6 +44,21 @@ Describe 'Test-TranscriptLeak' {
         $r.Hits[0].Kind | Should -Be 'test-codeunit'
         $r.Hits[0].Source | Should -Be 'tool_result'
     }
+    It 'does not flag a test codeunit name the agent searches for (tool_use input)' {
+        # Feedback hands codeunit names to the agent; grepping for them is legitimate.
+        $t = New-Transcript @((Use-Tool 'Grep' @{ pattern = 'Secret Invoice Tests'; path = 'app' }), (Tool-Result 'No matches found'))
+        (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Leaked | Should -BeFalse
+    }
+    It 'flags hidden test source returned in a tool_result' {
+        $t = New-Transcript @((Use-Tool 'Bash' @{ command = 'cat x' }), (Tool-Result "codeunit 50100 `"Secret Invoice Tests`"`n{`n    Subtype = Test;"))
+        $r = Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader
+        $r.Leaked | Should -BeTrue
+        $r.Hits.Kind | Should -Contain 'test-codeunit'
+    }
+    It 'still flags repo path patterns in tool_result content' {
+        $t = New-Transcript @((Use-Tool 'Bash' @{ command = 'ls' }), (Tool-Result 'C:\GeneralDev\AL\rf-bench\tasks'))
+        (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Hits.Kind | Should -Contain 'repo-root'
+    }
     It 'flags unquoted codeunit name inside array-form tool_result content' {
         $t = New-Transcript @(Tool-Result @(@{ type = 'text'; text = 'x PlainNamed y' }))
         (Test-TranscriptLeak $t $script:Cfg $script:Task $script:Grader).Leaked | Should -BeTrue

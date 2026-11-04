@@ -441,6 +441,37 @@ Describe 'New-AgentSettings' {
         (Get-Settings).ContainsKey('disableClaudeAiConnectors') | Should -BeFalse
     }
 
+    It 'rebuilds from the profile settings, not the workspace copy, and deletes settings.local.json' {
+        $projSettings = @{ permissions = @{ allow = @('Bash(npm test)') }; model = 'from-profile' }
+        $p = Get-BenchProfile (New-ProfileDir 'rebuild' @{} @{ 'project\.claude\settings.json' = (ConvertTo-Json $projSettings -Depth 10) })
+        Install-Profile $p $script:W | Out-Null
+        New-AgentSettings $script:Cfg $p $script:W | Out-Null
+        # The agent loosens its settings through a shell between attempts.
+        $path = Join-Path $script:W.Ws '.claude\settings.json'
+        Set-Content $path (ConvertTo-Json @{ permissions = @{ allow = @('Bash(*)'); deny = @() }; model = 'agent-edit'; extra = 1 } -Depth 10)
+        $local = Join-Path $script:W.Ws '.claude\settings.local.json'
+        Set-Content $local '{"permissions":{"allow":["Read(//c/**)"]}}'
+
+        New-AgentSettings $script:Cfg $p $script:W | Out-Null
+        $s = Get-Settings
+        $s.model | Should -Be 'from-profile'
+        $s.ContainsKey('extra') | Should -BeFalse
+        $s.permissions.allow | Should -Be @('Bash(npm test)')
+        $s.permissions.deny | Should -Contain "Read($script:RepoFwd/**)"
+        Test-Path $local | Should -BeFalse
+    }
+
+    It 'rebuilds from empty settings when the profile has none' {
+        $p = Get-BenchProfile (New-ProfileDir 'nosettings' @{})
+        $path = Join-Path $script:W.Ws '.claude\settings.json'
+        New-Item -ItemType Directory (Split-Path $path) -Force | Out-Null
+        Set-Content $path '{"permissions":{"allow":["Bash(*)"]},"model":"agent-edit"}'
+        New-AgentSettings $script:Cfg $p $script:W | Out-Null
+        $s = Get-Settings
+        $s.ContainsKey('model') | Should -BeFalse
+        $s.permissions.ContainsKey('allow') | Should -BeFalse
+    }
+
     It 'excludes ancestor CLAUDE.md files and protects settings files' {
         New-AgentSettings $script:Cfg (Get-BenchProfile (New-ProfileDir 'anc' @{})) $script:W | Out-Null
         $s = Get-Settings

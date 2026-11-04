@@ -64,8 +64,31 @@ function ConvertTo-AgentPath([string[]]$Lines, [object[]]$Map) {
 }
 
 function Remove-AppQuietly($Config, [guid]$AppId) {
-    try { Remove-BenchApp $Config -AppId $AppId }
+    try { $null = Remove-BenchApp $Config -AppId $AppId }
     catch { Write-Warning "Grader cleanup: removing app $AppId failed: $($_.Exception.Message)" }
+}
+
+# The id in the agent's app.json when it is a valid guid that differs from the task app id
+# (an agent that changed the id would otherwise leave its app published); else $null.
+function Get-ChangedAppId([string]$AppDir, $TaskAppId) {
+    $path = Join-Path $AppDir 'app.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try { $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { return $null }
+    if ($null -eq $json -or -not $json.PSObject.Properties['id']) { return $null }
+    $id = [guid]::Empty
+    if (-not [guid]::TryParse([string]$json.id, [ref]$id)) { return $null }
+    if ($id -eq [guid]"$TaskAppId") { return $null }
+    $id
+}
+
+# Hidden test sources and the built test app must not stay on disk after grading.
+function Remove-GraderTestCopies([string]$TestsDir, [string]$TestAppFile) {
+    foreach ($p in $TestsDir, $TestAppFile) {
+        if (Test-Path -LiteralPath $p) {
+            try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "Grader cleanup: removing $p failed: $($_.Exception.Message)" }
+        }
+    }
 }
 
 function Invoke-Grade {
@@ -83,9 +106,21 @@ function Invoke-Grade {
     $appDir = Join-Path $attemptDir 'app'
     $testsDir = Join-Path $attemptDir 'tests'
     $outDir = Join-Path $attemptDir 'out'
+    $testAppFile = Join-Path $outDir "$($Task.Id).Tests.app"
     Copy-Folder $AgentAppDir $appDir
-    Copy-Folder $Task.TestsDir $testsDir
-    New-Item -ItemType Directory $outDir -Force | Out-Null
+    try {
+        Copy-Folder $Task.TestsDir $testsDir
+        New-Item -ItemType Directory $outDir -Force | Out-Null
+        Invoke-GradeCore -Config $Config -Task $Task -AgentAppDir $AgentAppDir -GraderDir $GraderDir `
+            -AttemptDir $attemptDir -AppDir $appDir -TestsDir $testsDir -OutDir $outDir -TestAppFile $testAppFile
+    }
+    finally {
+        Remove-GraderTestCopies $testsDir $testAppFile
+    }
+}
+
+function Invoke-GradeCore($Config, $Task, [string]$AgentAppDir, [string]$GraderDir, [string]$AttemptDir,
+    [string]$AppDir, [string]$TestsDir, [string]$OutDir, [string]$TestAppFile) {
 
     $grade = [pscustomobject]@{
         Compiled         = $false
@@ -117,15 +152,17 @@ function Invoke-Grade {
     $grade.Compiled = $true
 
     $tests = @()
+    $changedAppId = Get-ChangedAppId $appDir $Task.AppId
     try {
         # Stale copies from a crashed run would block the publish; the test app depends on the app.
-        Remove-BenchApp $Config -AppId $Task.TestAppId
-        Remove-BenchApp $Config -AppId $Task.AppId
+        $null = Remove-BenchApp $Config -AppId $Task.TestAppId
+        $null = Remove-BenchApp $Config -AppId $Task.AppId
+        if ($changedAppId) { $null = Remove-BenchApp $Config -AppId $changedAppId }
 
         # A publish failure of the agent's app is the agent's result (for example an install
         # codeunit error), so it is graded as a failing pseudo-test and the tests are skipped.
         $publishError = $null
-        try { Publish-BenchApp $Config -AppFile $build.AppFile }
+        try { $null = Publish-BenchApp $Config -AppFile $build.AppFile }
         catch { $publishError = $_.Exception.Message }
 
         if ($null -ne $publishError) {
@@ -142,7 +179,7 @@ function Invoke-Grade {
             New-Item -ItemType Directory $symbols -Force | Out-Null
             Copy-Item -LiteralPath $build.AppFile -Destination $symbols -Force
             # Exceptions here (missing compiler, locked file) are infrastructure errors and throw.
-            $testBuild = Invoke-AlCompile $Config -AppDir $testsDir -OutFile (Join-Path $outDir "$($Task.Id).Tests.app")
+            $testBuild = Invoke-AlCompile $Config -AppDir $testsDir -OutFile $TestAppFile
             if (-not $testBuild.Success) {
                 $msg = @('The test app does not compile against your app:') + @($testBuild.Errors | Where-Object { $_ })
                 $tests = @([pscustomobject]@{
@@ -151,7 +188,7 @@ function Invoke-Grade {
                     })
             }
             else {
-                Publish-BenchApp $Config -AppFile $testBuild.AppFile
+                $null = Publish-BenchApp $Config -AppFile $testBuild.AppFile
                 $tests = @(Invoke-BenchTests $Config -TestAppId $Task.TestAppId | Where-Object { $_ })
                 if ($tests.Count -eq 0) {
                     $tests = @([pscustomobject]@{
@@ -165,6 +202,7 @@ function Invoke-Grade {
     finally {
         Remove-AppQuietly $Config $Task.TestAppId
         Remove-AppQuietly $Config $Task.AppId
+        if ($changedAppId) { Remove-AppQuietly $Config $changedAppId }
     }
 
     foreach ($t in $tests) {

@@ -240,7 +240,7 @@ function Publish-BenchApp {
         [Parameter(Mandatory)][string]$AppFile
     )
     Import-BcContainerHelper
-    Publish-BcContainerApp -containerName $Config.Bc.ContainerName -appFile $AppFile -sync -install -skipVerification 6>$null
+    $null = Publish-BcContainerApp -containerName $Config.Bc.ContainerName -appFile $AppFile -sync -install -skipVerification 6>$null
 }
 
 function Remove-BenchApp {
@@ -255,7 +255,7 @@ function Remove-BenchApp {
             Where-Object { "$($_.AppId)" -eq "$AppId" })
     foreach ($app in $apps) {
         $installed = $app.PSObject.Properties['IsInstalled'] -and [bool]$app.IsInstalled
-        UnPublish-BcContainerApp -containerName $name -name $app.Name -publisher $app.Publisher -version "$($app.Version)" `
+        $null = UnPublish-BcContainerApp -containerName $name -name $app.Name -publisher $app.Publisher -version "$($app.Version)" `
             -unInstall:$installed -doNotSaveData -doNotSaveSchema -force 6>$null
     }
 }
@@ -291,7 +291,7 @@ function Invoke-BenchTests {
     Import-BcContainerHelper
     $xml = Get-XUnitResultPath $Config
     try {
-        Run-TestsInBcContainer -containerName $Config.Bc.ContainerName -credential $cred -extensionId "$TestAppId" `
+        $null = Run-TestsInBcContainer -containerName $Config.Bc.ContainerName -credential $cred -extensionId "$TestAppId" `
             -XUnitResultFileName $xml -detailed 6>$null
         if (-not (Test-Path -LiteralPath $xml -PathType Leaf)) {
             throw "Test run for $TestAppId produced no xUnit result file ($xml)."
