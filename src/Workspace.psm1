@@ -219,6 +219,13 @@ function Install-Profile {
     [pscustomobject]@{ McpConfigPath = $mcpPath; InstalledPlugins = $installed }
 }
 
+# Spellings of an absolute path as it may appear in a shell command.
+function Get-ShellPathForms([string]$Path) {
+    $win = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $perm = ConvertTo-PermissionPath $win
+    @($win, ($win -replace '\\', '/'), $perm, ($perm -replace '^//', '/')) | Select-Object -Unique
+}
+
 function Get-RunnerDenyRules($Config, $HarnessProfile, $Workspace) {
     $rules = [Collections.Generic.List[string]]::new()
     foreach ($p in @($Config.RepoRoot)) {
@@ -233,8 +240,12 @@ function Get-RunnerDenyRules($Config, $HarnessProfile, $Workspace) {
     # The agent must not loosen its own settings (bypassPermissions allows writes to .claude/).
     $rules.Add("Edit($(ConvertTo-PermissionPath $Workspace.Ws)/.claude/settings*.json)")
     $rules.Add("Edit($(ConvertTo-PermissionPath $Workspace.ClaudeHome)/settings*.json)")
-    foreach ($r in 'Bash(*rf-bench*)', 'PowerShell(*rf-bench*)', 'Bash(*\grader*)', 'PowerShell(*\grader*)', 'Bash(*/grader*)', 'PowerShell(*/grader*)') {
-        $rules.Add($r)
+    # Shell rules name the full repo and grader paths in every spelling a command may use
+    # (C:\x, C:/x, //c/x, /c/x), never a bare word that could also match the workspace path.
+    foreach ($p in $Config.RepoRoot, $Workspace.GraderDir) {
+        foreach ($form in Get-ShellPathForms $p) {
+            $rules.Add("Bash(*$form*)"); $rules.Add("PowerShell(*$form*)")
+        }
     }
     if (-not $HarnessProfile.AllowWeb) { $rules.Add('WebFetch'); $rules.Add('WebSearch') }
     , $rules.ToArray()
@@ -280,8 +291,8 @@ function Test-AllowDenied([string]$Allow, [string[]]$Deny) {
 }
 
 # CLAUDE.md / rules exclusions for every folder above the workspace. Claude Code loads
-# CLAUDE.md from every ancestor folder; on this machine %TEMP% sits under the user's home,
-# whose .claude/CLAUDE.md must not reach the agent.
+# CLAUDE.md from every ancestor folder. Defense in depth: the default TempRoot (C:\rfb-runs) is outside
+# the user home, but a TempRoot under it would expose ~/.claude/CLAUDE.md as an ancestor file.
 function Get-AncestorClaudeMdExcludes([string]$Ws) {
     $list = [Collections.Generic.List[string]]::new()
     $dir = Split-Path ([IO.Path]::GetFullPath($Ws).TrimEnd('\'))

@@ -38,7 +38,7 @@ Example:
 
 ## user/
 
-Copied as-is into `%TEMP%\rf-bench\<runId>\<taskId>\<repeat>\claude-home`, which is the
+Copied as-is into `<TempRoot>\<runId>\<taskId>\<repeat>\claude-home` (default TempRoot `C:\rfb-runs`), which is the
 agent's `CLAUDE_CONFIG_DIR`. Typical content: `CLAUDE.md`, `rules/`, `skills/`, `agents/`,
 `commands/`, `settings.json`. A file whose name contains `credentials` is refused: auth goes
 through environment variables only.
@@ -67,14 +67,17 @@ Bare tool names (`Read`) and relative paths are kept; deny still wins at runtime
   - the same `Read`/`Edit` pair for the run's `grader` folder;
   - `Edit(<ws>/.claude/settings*.json)` and `Edit(<claude-home>/settings*.json)` so the agent
     cannot remove these rules (`bypassPermissions` otherwise allows writes to `.claude/`);
-  - `Bash(*rf-bench*)`, `PowerShell(*rf-bench*)`, `Bash(*\grader*)`, `PowerShell(*\grader*)`,
-    `Bash(*/grader*)`, `PowerShell(*/grader*)`;
+  - `Bash(*<path>*)` and `PowerShell(*<path>*)` for the repo root and the run's grader folder,
+    each in four spellings: `C:\GeneralDev\AL\rf-bench`, `C:/GeneralDev/AL/rf-bench`,
+    `//c/GeneralDev/AL/rf-bench`, `/c/GeneralDev/AL/rf-bench`. Never a bare word such as
+    `rf-bench`, which could also match the workspace path and block legitimate commands;
   - `WebFetch`, `WebSearch` unless `allowWeb: true`.
 - `disableClaudeAiConnectors: true` in `strict` mode.
 - `claudeMdExcludes`: `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/CLAUDE.md`,
   `.claude/CLAUDE.local.md`, `.claude/rules/**` of every folder above the workspace (both
-  `C:/...` and `/c/...` spellings). `%TEMP%` lies under the user's home, so without this the
-  user's `~\.claude\CLAUDE.md` could be loaded as an ancestor project file.
+  `C:/...` and `/c/...` spellings). Defense in depth: the default TempRoot `C:\rfb-runs` is
+  outside the user's home, so `~\.claude\CLAUDE.md` is not an ancestor of the workspace; a
+  TempRoot under the home folder would otherwise expose it as an ancestor project file.
 
 The workspace is also `git init`-ed, so Claude Code's parent-folder walk for project skills
 stops at the workspace ("up to the repository root") and cannot reach `~\.claude\skills`.

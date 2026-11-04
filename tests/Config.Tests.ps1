@@ -15,7 +15,7 @@ Describe 'Get-BenchConfig' {
         $c = Get-BenchConfig
         $c.Claude.MaxAttempts | Should -Be 3
         $c.Auth.Mode | Should -Be 'subscription'
-        $c.TempRoot | Should -Be (Join-Path $env:TEMP 'rf-bench')
+        $c.TempRoot | Should -Be 'C:\rfb-runs'
     }
     It 'sets RepoRoot to the repo root' {
         (Get-BenchConfig).RepoRoot | Should -Be (Resolve-Path (Join-Path $PSScriptRoot '..')).Path

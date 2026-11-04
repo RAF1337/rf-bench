@@ -285,7 +285,7 @@ Describe 'New-AgentSettings' {
 
     It 'deny rules win over profile allow' {
         $projSettings = @{ permissions = @{
-                allow = @("Read($script:RepoFwd/**)", "Read($(ConvertTo-PermPath $script:Cfg.RepoRoot)/tasks/**)", 'Bash(npm test)', 'Bash(cat *rf-bench*)', 'Read(//c/**)', 'Read(**/*.al)', 'Read', 'WebFetch(domain:learn.microsoft.com)')
+                allow = @("Read($script:RepoFwd/**)", "Read($(ConvertTo-PermPath $script:Cfg.RepoRoot)/tasks/**)", 'Bash(npm test)', "Bash(cat $($script:Cfg.RepoRoot)\tasks\T001\solution\x.al)", 'Bash(cat *rf-bench*-notes.txt)', 'Read(//c/**)', 'Read(**/*.al)', 'Read', 'WebFetch(domain:learn.microsoft.com)')
                 deny  = @('Bash(rm -rf *)')
             }; model = 'keep-me'
         }
@@ -300,7 +300,8 @@ Describe 'New-AgentSettings' {
         $s.permissions.deny | Should -Contain 'Bash(rm -rf *)'
         $s.permissions.allow | Should -Not -Contain "Read($script:RepoFwd/**)"
         $s.permissions.allow | Should -Not -Contain "Read($(ConvertTo-PermPath $script:Cfg.RepoRoot)/tasks/**)"
-        $s.permissions.allow | Should -Not -Contain 'Bash(cat *rf-bench*)'
+        $s.permissions.allow | Should -Not -Contain "Bash(cat $($script:Cfg.RepoRoot)\tasks\T001\solution\x.al)"
+        $s.permissions.allow | Should -Contain 'Bash(cat *rf-bench*-notes.txt)'
         $s.permissions.allow | Should -Not -Contain 'WebFetch(domain:learn.microsoft.com)'
         $s.permissions.allow | Should -Contain 'Bash(npm test)'
         $s.permissions.allow | Should -Not -Contain 'Read(//c/**)'
@@ -321,9 +322,45 @@ Describe 'New-AgentSettings' {
                 "Read($script:RepoFwd/**)", "Edit($script:RepoFwd/**)",
                 "Read($repoPerm/**)", "Edit($repoPerm/**)",
                 "Read($($script:W.GraderDir -replace '\\','/')/**)", "Read($graderPerm/**)",
-                'Bash(*rf-bench*)', 'PowerShell(*rf-bench*)', 'Bash(*\grader*)', 'PowerShell(*\grader*)',
                 'WebFetch', 'WebSearch')) {
             $deny | Should -Contain $r
+        }
+        foreach ($root in $script:Cfg.RepoRoot, $script:W.GraderDir) {
+            $fwd = $root -replace '\\', '/'
+            foreach ($form in $root, $fwd, (ConvertTo-PermPath $root)) {
+                foreach ($tool in 'Bash', 'PowerShell') { $deny | Should -Contain "$tool(*$form*)" }
+            }
+        }
+        # Never the bare word.
+        $deny | Should -Not -Contain 'Bash(*rf-bench*)'
+        $deny | Should -Not -Contain 'PowerShell(*rf-bench*)'
+    }
+
+    It 'shell deny patterns hit the repo and grader but not the workspace' {
+        New-AgentSettings $script:Cfg (Get-BenchProfile (New-ProfileDir 'shell' @{})) $script:W | Out-Null
+        $shellSpecs = @((Get-Settings).permissions.deny | Where-Object { $_ -match '^(Bash|PowerShell)\(' } |
+            ForEach-Object { $_ -replace '^(Bash|PowerShell)\((.*)\)$', '$2' })
+        $shellSpecs.Count | Should -BeGreaterThan 0
+        function Test-Denied([string]$Cmd) { [bool]($shellSpecs | Where-Object { $Cmd -like $_ }) }
+
+        $ws = $script:W.Ws
+        $wsFwd = $ws -replace '\\', '/'
+        $wsPosix = (ConvertTo-PermPath $ws) -replace '^//', '/'
+        foreach ($cmd in @(
+                "& `"$ws\.alpackages\alc.exe`" /project:`"$ws\app`" /packagecachepath:`"$ws\.alpackages`"",
+                "cd $wsFwd/app && ls",
+                "cd $wsPosix/app && cat app.json",
+                "Get-Content $ws\TASK.md")) {
+            Test-Denied $cmd | Should -BeFalse -Because $cmd
+        }
+        $repo = $script:Cfg.RepoRoot
+        foreach ($cmd in @(
+                "Get-Content $repo\tasks\T001\solution\app\src\Fix.al",
+                "cat $($repo -replace '\\', '/')/tasks/T001/task.json",
+                "ls $(ConvertTo-PermPath $repo)/tasks",
+                "cat $((ConvertTo-PermPath $repo) -replace '^//', '/')/tasks/T001/task.json",
+                "dir $($script:W.GraderDir)\tests")) {
+            Test-Denied $cmd | Should -BeTrue -Because $cmd
         }
     }
 

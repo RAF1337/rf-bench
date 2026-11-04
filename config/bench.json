@@ -1,5 +1,5 @@
 {
-  "TempRoot": "%TEMP%\\rf-bench",
+  "TempRoot": "C:\\rfb-runs",
   "Bc": {
     "ArtifactType": "Sandbox",
     "Country": "w1",
