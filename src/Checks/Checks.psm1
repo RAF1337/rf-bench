@@ -46,18 +46,29 @@ function ConvertTo-FieldName([string]$Arg) {
     if ($m.Success) { ConvertTo-AlName $m.Value } else { ConvertTo-AlName $Arg }
 }
 
+# Table of a record var as seen from the procedure: locals/parameters hide globals.
+function Get-RecordTable($Proc, [string]$Var) {
+    if ($Proc.RecordVars.ContainsKey($Var)) { return $Proc.RecordVars[$Var] }
+    if ($Proc.GlobalRecordVars.ContainsKey($Var)) { return $Proc.GlobalRecordVars[$Var] }
+    $null
+}
+
 function Test-TableFilter($Proc, [string]$Var, $Tables) {
     if (-not $Tables) { return $true }
-    $table = $Proc.RecordVars[$Var]
+    $table = Get-RecordTable $Proc $Var
     foreach ($t in @($Tables)) { if ((ConvertTo-AlName $t) -ieq $table) { return $true } }
     $false
 }
 
-# Local, non-temporary record variables are the only ones these checks evaluate:
-# parameters and globals can be prepared by another procedure, and temporary
-# records do not touch the database.
-function Test-LocalDbRecord($Proc, [string]$Var) {
-    $Var -and $Proc.RecordVars.ContainsKey($Var) -and $Var -notin $Proc.ParamVars -and -not $Proc.TempVars.Contains($Var)
+# Sites for the SetLoadFields and ReadIsolation checks: non-temporary local or
+# global record variables. Record parameters are skipped (the caller may have
+# prepared them) and temporary records do not touch the database.
+function Test-DbRecordSite($Proc, [string]$Var) {
+    if (-not $Var) { return $false }
+    if ($Proc.RecordVars.ContainsKey($Var)) {
+        return $Var -notin $Proc.ParamVars -and -not $Proc.TempVars.Contains($Var)
+    }
+    $Proc.GlobalRecordVars.ContainsKey($Var) -and -not $Proc.GlobalTempVars.Contains($Var)
 }
 
 function Test-RequiresSetLoadFieldsBeforeRead($Procs, $Params, $Context) {
@@ -66,9 +77,9 @@ function Test-RequiresSetLoadFieldsBeforeRead($Procs, $Params, $Context) {
     $keyFields = @(Get-Param $Params 'keyFields' | Where-Object { $_ } | ForEach-Object { ConvertTo-AlName $_ })
 
     foreach ($p in $Procs) {
-        $sites = @($p.Calls | Where-Object { $_.Method -in $script:ReadMethods -and (Test-LocalDbRecord $p $_.Var) -and (Test-TableFilter $p $_.Var $tables) })
+        $sites = @($p.Calls | Where-Object { $_.Method -in $script:ReadMethods -and (Test-DbRecordSite $p $_.Var) -and (Test-TableFilter $p $_.Var $tables) })
         foreach ($c in $sites) {
-            $slf = @($p.Calls | Where-Object { $_.Var -ieq $c.Var -and $_.Method -ieq 'SetLoadFields' -and $_.Pos -lt $c.Pos }) | Select-Object -Last 1
+            $slf = @($p.Calls | Where-Object { $_.Var -ieq $c.Var -and $_.Method -ieq 'SetLoadFields' -and $_.Args.Count -gt 0 -and $_.Pos -lt $c.Pos }) | Select-Object -Last 1
             if (-not $slf) {
                 New-Finding $Context $c.Line $false "$($c.Var).$($c.Method) in $($p.Procedure) without an earlier $($c.Var).SetLoadFields"
                 continue
@@ -99,7 +110,7 @@ function Test-RequiresSetLoadFieldsBeforeRead($Procs, $Params, $Context) {
 function Test-ReadIsolationOnCount($Procs, $Params, $Context) {
     $tables = Get-Param $Params 'tables'
     foreach ($p in $Procs) {
-        foreach ($c in $p.Calls | Where-Object { $_.Method -in $script:CountMethods -and (Test-LocalDbRecord $p $_.Var) -and (Test-TableFilter $p $_.Var $tables) }) {
+        foreach ($c in $p.Calls | Where-Object { $_.Method -in $script:CountMethods -and (Test-DbRecordSite $p $_.Var) -and (Test-TableFilter $p $_.Var $tables) }) {
             $set = @($p.Assigns | Where-Object { $_.Var -ieq $c.Var -and $_.Prop -ieq 'ReadIsolation' -and $_.Pos -lt $c.Pos }).Count -gt 0 -or
                 @($p.Calls | Where-Object { $_.Var -ieq $c.Var -and $_.Method -ieq 'ReadIsolation' -and $_.Args.Count -gt 0 -and $_.Pos -lt $c.Pos }).Count -gt 0
             $detail = if ($set) { "$($c.Var).$($c.Method) after ReadIsolation" } else { "$($c.Var).$($c.Method) in $($p.Procedure) without an earlier $($c.Var).ReadIsolation" }

@@ -47,13 +47,25 @@ Describe 'Import-AlParser' {
     It 'throws with searched paths when DLL missing' {
         $empty = Join-Path $TestDrive 'no-extensions'
         New-Item -ItemType Directory -Path $empty | Out-Null
+        $compiler = Join-Path $TestDrive 'missing-compiler'
+        $cfg = [pscustomobject]@{
+            Paths = [pscustomobject]@{ AlParserDll = '' }
+            Bc    = [pscustomobject]@{ CompilerFolder = $compiler }
+        }
+        { Import-AlParser -Config $cfg -ExtensionsRoot $empty } | Should -Throw '*Searched:*'
+        { Import-AlParser -Config $cfg -ExtensionsRoot $empty } | Should -Throw "*$compiler*"
+        { Import-AlParser -Config $cfg -ExtensionsRoot $empty } | Should -Throw "*$empty*"
+    }
+    It 'throws when the configured DLL path does not exist or is a directory' {
         $bogus = Join-Path $TestDrive 'missing\Microsoft.Dynamics.Nav.CodeAnalysis.dll'
         $cfg = [pscustomobject]@{
             Paths = [pscustomobject]@{ AlParserDll = $bogus }
             Bc    = [pscustomobject]@{ CompilerFolder = '' }
         }
-        { Import-AlParser -Config $cfg -ExtensionsRoot $empty } | Should -Throw '*Searched:*'
-        { Import-AlParser -Config $cfg -ExtensionsRoot $empty } | Should -Throw "*$bogus*"
+        # No fallthrough to the extension search, even though a DLL exists there.
+        { Import-AlParser -Config $cfg } | Should -Throw "AL parser DLL not found at configured path $bogus"
+        $cfg.Paths.AlParserDll = $TestDrive
+        { Import-AlParser -Config $cfg } | Should -Throw "AL parser DLL not found at configured path $TestDrive"
     }
 }
 
@@ -106,7 +118,9 @@ Describe 'Invoke-AlChecks' {
         $commentOrString = @{
             'Bad.Codeunit.al'         = 8, 18, 19, 20, 30, 31, 69
             'BadCustomer.Page.al'     = @(22)
+            'BadExtra.Codeunit.al'    = @(9)
             'Good.Codeunit.al'        = 46, 47, 48
+            'GoodGlobals.Codeunit.al' = 24, 30
             'GoodCustomer.Page.al'    = 26, 27
         }
         $f = @(Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs $script:AllSpecs) +
@@ -133,21 +147,26 @@ Describe 'Invoke-AlChecks' {
 
 Describe 'RequiresSetLoadFieldsBeforeRead' {
     It 'passes good fixtures' {
-        Assert-AllPassed (Invoke-AlChecks -SourceDir $script:GoodDir -CheckSpecs @(New-Spec 'RequiresSetLoadFieldsBeforeRead'))
+        $f = Invoke-AlChecks -SourceDir $script:GoodDir -CheckSpecs @(New-Spec 'RequiresSetLoadFieldsBeforeRead')
+        # 8 read sites in Good.Codeunit.al (incl. a global) + 1 global in GoodGlobals.Codeunit.al.
+        @($f).Count | Should -Be 9
+        Assert-AllPassed $f
     }
     It 'fails reads without earlier SetLoadFields on the same var' {
         $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'RequiresSetLoadFieldsBeforeRead')
         Get-FailedSites $f 'RequiresSetLoadFieldsBeforeRead' |
-            Should -Be @('Bad.Codeunit.al:10', 'Bad.Codeunit.al:21', 'Bad.Codeunit.al:52', 'Bad.Codeunit.al:61')
+            Should -Be (@('Bad.Codeunit.al:10', 'Bad.Codeunit.al:21', 'Bad.Codeunit.al:52', 'Bad.Codeunit.al:61',
+                    'BadExtra.Codeunit.al:16', 'BadExtra.Codeunit.al:30') | Sort-Object)
         @($f | Where-Object Passed).Count | Should -Be 4
     }
     It 'fails an uncovered field read with checkFieldCoverage' {
         $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'RequiresSetLoadFieldsBeforeRead' 'data-access' $script:CoverageParams)
         Get-FailedSites $f 'RequiresSetLoadFieldsBeforeRead' |
-            Should -Be @('Bad.Codeunit.al:10', 'Bad.Codeunit.al:21', 'Bad.Codeunit.al:43', 'Bad.Codeunit.al:52', 'Bad.Codeunit.al:61')
+            Should -Be (@('Bad.Codeunit.al:10', 'Bad.Codeunit.al:21', 'Bad.Codeunit.al:43', 'Bad.Codeunit.al:52', 'Bad.Codeunit.al:61',
+                    'BadExtra.Codeunit.al:16', 'BadExtra.Codeunit.al:30') | Sort-Object)
     }
     It 'restricts to listed tables' {
-        $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'RequiresSetLoadFieldsBeforeRead' 'data-access' @{ tables = @('Vendor') })
+        $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'RequiresSetLoadFieldsBeforeRead' 'data-access' @{ tables = @('Sales Line') })
         @($f).Count | Should -Be 0
     }
 }
@@ -155,12 +174,14 @@ Describe 'RequiresSetLoadFieldsBeforeRead' {
 Describe 'ReadIsolationOnCount' {
     It 'passes good fixtures' {
         $f = Invoke-AlChecks -SourceDir $script:GoodDir -CheckSpecs @(New-Spec 'ReadIsolationOnCount' 'locking-isolation')
-        @($f).Count | Should -Be 2
+        # IsEmpty + Count in Good.Codeunit.al, global Count in GoodGlobals.Codeunit.al.
+        @($f).Count | Should -Be 3
         Assert-AllPassed $f
     }
     It 'fails Count without ReadIsolation' {
         $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'ReadIsolationOnCount' 'locking-isolation')
-        Get-FailedSites $f 'ReadIsolationOnCount' | Should -Be @('Bad.Codeunit.al:33')
+        Get-FailedSites $f 'ReadIsolationOnCount' | Should -Be (@('Bad.Codeunit.al:33', 'BadExtra.Codeunit.al:22') | Sort-Object)
+        @($f).Count | Should -Be 2
     }
     It 'restricts to listed tables' {
         $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'ReadIsolationOnCount' 'locking-isolation' @{ tables = @('Customer') })
@@ -171,7 +192,8 @@ Describe 'ReadIsolationOnCount' {
 Describe 'NoCommitIn' {
     It 'passes good fixtures' {
         $f = Invoke-AlChecks -SourceDir $script:GoodDir -CheckSpecs @(New-Spec 'NoCommitIn' 'transactions')
-        Assert-AllPassed $f
+        # Commit only appears in comments and strings there: no sites at all.
+        @($f).Count | Should -Be 0
     }
     It 'fails Commit in any object when no objects listed' {
         $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'NoCommitIn' 'transactions')
@@ -212,7 +234,8 @@ Describe 'NoCalcFieldsInLoop' {
 Describe 'LogicNotOnPage' {
     It 'passes good fixtures' {
         $f = Invoke-AlChecks -SourceDir $script:GoodDir -CheckSpecs @(New-Spec 'LogicNotOnPage' 'architecture')
-        Assert-AllPassed $f
+        # Writes there target temporary records, non-records or a codeunit: no sites at all.
+        @($f).Count | Should -Be 0
     }
     It 'fails Modify in a page action trigger' {
         $f = Invoke-AlChecks -SourceDir $script:BadDir -CheckSpecs @(New-Spec 'LogicNotOnPage' 'architecture')

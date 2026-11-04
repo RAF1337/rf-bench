@@ -40,8 +40,12 @@ function Import-AlParser {
 
     $configured = $Config.Paths.AlParserDll
     if ($configured) {
+        # An explicit path is authoritative: never fall back to another DLL.
+        if (-not (Test-Path -LiteralPath $configured -PathType Leaf)) {
+            throw "AL parser DLL not found at configured path $configured"
+        }
         $searched.Add($configured)
-        if (Test-Path -LiteralPath $configured -PathType Leaf) { $found = (Resolve-Path -LiteralPath $configured).Path }
+        $found = (Resolve-Path -LiteralPath $configured).Path
     }
 
     $compilerFolder = $Config.Bc.CompilerFolder

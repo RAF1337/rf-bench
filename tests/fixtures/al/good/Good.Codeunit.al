@@ -95,6 +95,7 @@ codeunit 50100 "Good Codeunit"
     begin
         if TempBuffer.Get('X') then
             exit(TempBuffer.Count());
+        GlobalCustomer.SetLoadFields(Name);
         if GlobalCustomer.Get('X') then
             exit(1);
         if TempCustomer.FindFirst() then
