@@ -319,6 +319,30 @@ Describe 'Invoke-Grade' {
         $g.FullyRight | Should -BeTrue
     }
 
+    It 'keeps every real finding as its own entry when several checks fail' {
+        Set-BackendMocks -RealChecks
+        $agent = New-AgentApp
+        Set-Content -LiteralPath (Join-Path $agent 'src\Starter.Codeunit.al') -Value @'
+codeunit 50100 Starter
+{
+    procedure Run()
+    var
+        Customer: Record Customer;
+    begin
+        if Customer.Find('-') then;
+        if Customer.Find('+') then;
+        Commit();
+    end;
+}
+'@
+        $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir $agent -GraderDir $script:Grader -Attempt 1
+        @($g.Findings).Count | Should -Be 3
+        @($g.Findings | Where-Object { $_ -isnot [pscustomobject] }).Count | Should -Be 0
+        @($g.Findings | Where-Object { -not $_.Passed } | ForEach-Object Check | Sort-Object -Unique) | Should -Be @('NoCommitIn', 'NoFindMinus')
+        $g.ChecksPassed | Should -BeFalse
+        $g.FullyRight | Should -BeFalse
+    }
+
     It 'replaces a stale attempt folder' {
         Set-BackendMocks
         $stale = Join-Path $script:Grader 'attempt1\app\src\Stale.al'

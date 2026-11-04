@@ -173,7 +173,8 @@ function Invoke-Grade {
     }
 
     $specs = @(Get-Content -LiteralPath $Task.ChecksFile -Raw | ConvertFrom-Json)
-    $findings = @(Invoke-AlChecks -SourceDir $appDir -CheckSpecs $specs -Config $Config | Where-Object { $_ })
+    # Invoke-AlChecks returns its findings as one array object; ForEach-Object unrolls it.
+    $findings = @(Invoke-AlChecks -SourceDir $appDir -CheckSpecs $specs -Config $Config | ForEach-Object { $_ } | Where-Object { $_ })
 
     $grade.Tests = [object[]]$tests
     $grade.TestsPassed = -not @($tests | Where-Object { -not $_.IsBudget -and -not $_.Passed })
