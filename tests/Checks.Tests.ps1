@@ -56,6 +56,27 @@ Describe 'Import-AlParser' {
         { Import-AlParser -Config $cfg -ExtensionsRoot $empty } | Should -Throw "*$compiler*"
         { Import-AlParser -Config $cfg -ExtensionsRoot $empty } | Should -Throw "*$empty*"
     }
+    It 'picks the DLL next to alc.exe in the compiler folder, never the darwin or linux build' {
+        $cf = Join-Path $TestDrive 'cf-platforms'
+        foreach ($os in 'darwin', 'linux', 'win32') {
+            $bin = Join-Path $cf "compiler\extension\bin\$os"
+            New-Item -ItemType Directory $bin -Force | Out-Null
+            Set-Content (Join-Path $bin 'Microsoft.Dynamics.Nav.CodeAnalysis.dll') $os
+        }
+        Set-Content (Join-Path $cf 'compiler\extension\bin\win32\alc.exe') 'exe'
+        InModuleScope AlParser -Parameters @{ Cf = $cf } {
+            Find-CompilerFolderDll $Cf | Should -Be (Join-Path $Cf 'compiler\extension\bin\win32\Microsoft.Dynamics.Nav.CodeAnalysis.dll')
+        }
+    }
+    It 'ignores darwin and linux DLLs when no Windows build exists' {
+        $cf = Join-Path $TestDrive 'cf-nowin'
+        foreach ($os in 'darwin', 'linux') {
+            $bin = Join-Path $cf "compiler\extension\bin\$os"
+            New-Item -ItemType Directory $bin -Force | Out-Null
+            Set-Content (Join-Path $bin 'Microsoft.Dynamics.Nav.CodeAnalysis.dll') $os
+        }
+        InModuleScope AlParser -Parameters @{ Cf = $cf } { Find-CompilerFolderDll $Cf | Should -BeNullOrEmpty }
+    }
     It 'throws when the configured DLL path does not exist or is a directory' {
         $bogus = Join-Path $TestDrive 'missing\Microsoft.Dynamics.Nav.CodeAnalysis.dll'
         $cfg = [pscustomobject]@{

@@ -353,14 +353,17 @@ Describe 'Initialize-BenchBackend' {
         $script:ConfigPath = Join-Path $TestDrive 'bench.json'
         Copy-Item (Join-Path $PSScriptRoot '..\config\bench.json') $script:ConfigPath -Force
         $script:Original = Get-Content $script:ConfigPath -Raw
+        $script:LocalPath = Join-Path $TestDrive 'bench.local.json'
+        Remove-Item $script:LocalPath -ErrorAction Ignore
         Mock Get-BcArtifactUrl -ModuleName Backend.Docker { $script:Url }
         Mock New-BcContainer -ModuleName Backend.Docker { }
         Mock Start-BcContainer -ModuleName Backend.Docker { }
         Mock New-BcCompilerFolder -ModuleName Backend.Docker { New-CompilerFolder 'hostcompiler' }
     }
-    It 'creates the container and compiler folder and writes the path into bench.json' {
+    It 'creates the container and compiler folder and writes the path into bench.local.json' {
         $cfg = New-TestConfig
         Mock Test-BcContainer -ModuleName Backend.Docker { $false }
+        Set-Content $script:LocalPath '{ "Claude": { "MaxTurns": 9 } }'
 
         Initialize-BenchBackend $cfg -ConfigPath $script:ConfigPath
 
@@ -374,9 +377,14 @@ Describe 'Initialize-BenchBackend' {
         Should -Invoke New-BcCompilerFolder -ModuleName Backend.Docker -Times 1 -Exactly -ParameterFilter { $artifactUrl -eq $script:Url }
         $expected = Join-Path $TestDrive 'hostcompiler'
         $cfg.Bc.CompilerFolder | Should -Be $expected
-        (Get-Content $script:ConfigPath -Raw | ConvertFrom-Json).Bc.CompilerFolder | Should -Be $expected
-        $escaped = ($expected | ConvertTo-Json)
-        Get-Content $script:ConfigPath -Raw | Should -Be ($script:Original -replace '"CompilerFolder": ""', "`"CompilerFolder`": $escaped")
+        # bench.json (tracked) is untouched; the machine-specific path goes to bench.local.json.
+        Get-Content $script:ConfigPath -Raw | Should -Be $script:Original
+        $local = Get-Content $script:LocalPath -Raw | ConvertFrom-Json
+        $local.Bc.CompilerFolder | Should -Be $expected
+        $local.Claude.MaxTurns | Should -Be 9
+        $reloaded = Get-BenchConfig -Path $script:ConfigPath
+        $reloaded.Bc.CompilerFolder | Should -Be $expected
+        $reloaded.Bc.ContainerName | Should -Be 'rfbench'
     }
     It 'is idempotent when the container runs and the compiler folder exists' {
         $cfg = New-TestConfig

@@ -12,6 +12,10 @@ $script:McpModes = @('strict', 'open')
 # Prompts longer than this go on stdin instead of the command line (Windows limit is 32767 chars).
 $script:MaxArgPromptLength = 24000
 $script:RateLimitPattern = 'rate limit|usage limit|hit your (usage )?limit|429|overloaded'
+# Inherited variables that are kept although they match CLAUDE*/ANTHROPIC*.
+$script:KeepEnv = @('CLAUDE_CODE_GIT_BASH_PATH')
+# Run variables whose values are secrets; they are redacted from the attempt's output files.
+$script:SecretEnv = @('CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY')
 
 function Get-Prop($Obj, [string]$Name) {
     if ($null -eq $Obj) { return $null }
@@ -20,6 +24,19 @@ function Get-Prop($Obj, [string]$Name) {
 }
 
 function ConvertTo-NullableLong($Value) { if ($null -eq $Value) { $null } else { [long]$Value } }
+
+# Replaces every occurrence of the secret values with '<redacted>' in the given files.
+function Remove-SecretsFromFiles([string[]]$Paths, [string[]]$Secrets) {
+    $values = @($Secrets | Where-Object { $_ } | Sort-Object Length -Descending)
+    if (-not $values) { return }
+    foreach ($p in $Paths) {
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        $text = [IO.File]::ReadAllText($p)
+        $new = $text
+        foreach ($v in $values) { $new = $new.Replace($v, '<redacted>') }
+        if ($new -cne $text) { [IO.File]::WriteAllText($p, $new, [Text.UTF8Encoding]::new($false)) }
+    }
+}
 
 function ConvertFrom-ClaudeStream {
     [CmdletBinding()]
@@ -156,9 +173,10 @@ function Invoke-ClaudeAttempt {
     $psi.RedirectStandardError = $true
 
     # The runner may itself run inside Claude Code: drop inherited CLAUDE*/ANTHROPIC* variables
-    # unless the run sets them, then apply the run's overrides ($null = remove).
+    # unless the run sets them or they are machine setup (Git Bash location), then apply the
+    # run's overrides ($null = remove).
     foreach ($k in @($psi.Environment.Keys)) {
-        if ($k -match '^(CLAUDE|ANTHROPIC)' -and -not $Env.ContainsKey($k)) { $null = $psi.Environment.Remove($k) }
+        if ($k -match '^(CLAUDE|ANTHROPIC)' -and $k -notin $script:KeepEnv -and -not $Env.ContainsKey($k)) { $null = $psi.Environment.Remove($k) }
     }
     foreach ($k in $Env.Keys) {
         if ($null -eq $Env[$k]) { $null = $psi.Environment.Remove($k) } else { $psi.Environment[$k] = [string]$Env[$k] }
@@ -213,6 +231,8 @@ function Invoke-ClaudeAttempt {
         if ($proc) { try { $proc.StandardInput.Dispose() } catch { Write-Verbose "stdin dispose failed: $($_.Exception.Message)" } }
         $out.Dispose()
         $err.Dispose()
+        # The auth secret must never be stored in results (an agent can print its environment).
+        Remove-SecretsFromFiles @($TranscriptPath, "$TranscriptPath.stderr.txt") @($script:SecretEnv | ForEach-Object { [string]$Env[$_] })
     }
 
     $r = ConvertFrom-ClaudeStream $TranscriptPath

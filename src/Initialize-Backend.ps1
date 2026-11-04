@@ -4,7 +4,8 @@
     One-time backend setup: BC container (rfbench) and compiler folder.
 .DESCRIPTION
     Creates the BC container for the pinned artifact if it does not exist (starts it if stopped),
-    creates the compiler folder and writes its path into config/bench.json Bc.CompilerFolder.
+    creates the compiler folder and writes its path as Bc.CompilerFolder into config/bench.local.json
+    (gitignored, machine specific; Get-BenchConfig overlays it on config/bench.json).
     Idempotent. Requires Docker in Windows containers mode; with -SwitchDocker the script switches
     Docker to Windows mode and back to Linux mode when done.
     The BC password is read from the user environment variable named by Bc.Credential.PasswordEnvVar.

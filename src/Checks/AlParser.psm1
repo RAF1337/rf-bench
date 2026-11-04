@@ -28,6 +28,22 @@ function Test-AlParserLoaded {
     $null -ne ($script:SyntaxTreeType -as [type])
 }
 
+# The parser DLL of the Windows compiler build in a compiler folder: the one next to alc.exe
+# (bin\win32, or bin for older layouts), else any copy outside the macOS/Linux builds
+# (bin\darwin, bin\linux), which are never loaded. $null when there is none.
+function Find-CompilerFolderDll([string]$CompilerFolder) {
+    if (-not $CompilerFolder -or -not (Test-Path -LiteralPath $CompilerFolder -PathType Container)) { return $null }
+    foreach ($rel in 'compiler\extension\bin\win32', 'compiler\extension\bin') {
+        $dir = Join-Path $CompilerFolder $rel
+        $dll = Join-Path $dir $script:DllName
+        if ((Test-Path -LiteralPath (Join-Path $dir 'alc.exe') -PathType Leaf) -and (Test-Path -LiteralPath $dll -PathType Leaf)) { return $dll }
+    }
+    $hit = Get-ChildItem -LiteralPath $CompilerFolder -Recurse -File -Filter $script:DllName -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '[\\/]bin[\\/](darwin|linux)[\\/]' } |
+        Sort-Object FullName | Select-Object -First 1
+    if ($hit) { $hit.FullName } else { $null }
+}
+
 function Import-AlParser {
     [CmdletBinding()]
     param(
@@ -51,11 +67,7 @@ function Import-AlParser {
     $compilerFolder = $Config.Bc.CompilerFolder
     if (-not $found -and $compilerFolder) {
         $searched.Add((Join-Path $compilerFolder "**\$script:DllName"))
-        if (Test-Path -LiteralPath $compilerFolder -PathType Container) {
-            $hit = Get-ChildItem -LiteralPath $compilerFolder -Recurse -File -Filter $script:DllName -ErrorAction SilentlyContinue |
-                Sort-Object FullName | Select-Object -First 1
-            if ($hit) { $found = $hit.FullName }
-        }
+        $found = Find-CompilerFolderDll $compilerFolder
     }
 
     if (-not $found) {

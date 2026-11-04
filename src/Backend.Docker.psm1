@@ -78,14 +78,19 @@ function Find-AlcPath([string]$Folder) {
     throw "alc.exe not found. Searched: $($candidates -join '; ')"
 }
 
-# Replaces the Bc.CompilerFolder string value in bench.json text, keeping all other text as is.
+# Writes Bc.CompilerFolder into bench.local.json next to bench.json (gitignored, machine
+# specific), keeping any other values already in that file. bench.json itself is not changed.
 function Set-ConfigCompilerFolder([string]$ConfigPath, [string]$Folder) {
-    $text = Get-Content -LiteralPath $ConfigPath -Raw
-    $json = ConvertTo-Json -InputObject $Folder
-    $rx = [regex]'("CompilerFolder"\s*:\s*)"(?:[^"\\]|\\.)*"'
-    if (-not $rx.IsMatch($text)) { throw "bench.json: Bc.CompilerFolder not found in $ConfigPath" }
-    $new = $rx.Replace($text, { param($m) $m.Groups[1].Value + $json }, 1)
-    [IO.File]::WriteAllText($ConfigPath, $new, [Text.UTF8Encoding]::new($false))
+    $local = Get-LocalConfigPath $ConfigPath
+    $j = [ordered]@{}
+    if (Test-Path -LiteralPath $local -PathType Leaf) {
+        try { $j = Get-Content -LiteralPath $local -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop }
+        catch { throw "bench.local.json: invalid JSON in $local ($($_.Exception.Message))" }
+        if ($null -eq $j) { $j = [ordered]@{} }
+    }
+    if (-not $j.Contains('Bc') -or $j['Bc'] -isnot [System.Collections.IDictionary]) { $j['Bc'] = [ordered]@{} }
+    $j['Bc']['CompilerFolder'] = $Folder
+    [IO.File]::WriteAllText($local, (ConvertTo-Json $j -Depth 20), [Text.UTF8Encoding]::new($false))
 }
 
 # --- docker mode -----------------------------------------------------------------------------

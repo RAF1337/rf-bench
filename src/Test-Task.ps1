@@ -220,6 +220,12 @@ catch {
     $exitCode = 2
 }
 finally {
+    # The grader folders hold copies of the hidden tests; never leave them under TempRoot.
+    $validateRoot = Join-Path $cfg.TempRoot "validate\$($benchTask.Id)"
+    if (Test-Path -LiteralPath $validateRoot) {
+        try { Remove-Item -LiteralPath $validateRoot -Recurse -Force -ErrorAction Stop }
+        catch { Write-Host "warning: could not remove ${validateRoot}: $($_.Exception.Message)" }
+    }
     if ($switched) {
         try { Switch-DockerMode -Mode linux }
         catch { Write-Host "validator error: switching Docker back to Linux failed: $($_.Exception.Message)"; $exitCode = 2 }

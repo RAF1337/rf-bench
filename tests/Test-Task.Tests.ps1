@@ -103,6 +103,26 @@ Describe 'Test-Task' {
             }
         }
 
+        It 'deletes the validate grader root afterwards, also when grading throws' {
+            Mock Invoke-Grade {
+                New-Item -ItemType Directory (Join-Path $GraderDir 'attempt1\tests') -Force | Out-Null
+                Set-Content (Join-Path $GraderDir 'attempt1\tests\Hidden.Codeunit.al') 'codeunit 70100 Hidden {}'
+                $root = $Task.Root
+                if ($AgentAppDir -eq (Join-Path $root 'solution\variants\bad')) { return New-Grade bad -Fail NoFindMinus }
+                if ($AgentAppDir -eq (Join-Path $root 'assignment\app')) { return New-Grade wrong }
+                New-Grade right
+            }
+            (Invoke-Validator).Exit | Should -Be 0
+            Test-Path (Join-Path $script:Temp 'validate\TX01') | Should -BeFalse
+
+            Mock Invoke-Grade {
+                New-Item -ItemType Directory (Join-Path $GraderDir 'attempt1') -Force | Out-Null
+                throw 'container is down'
+            }
+            (Invoke-Validator).Exit | Should -Be 2
+            Test-Path (Join-Path $script:Temp 'validate\TX01') | Should -BeFalse
+        }
+
         It 'asserts Windows Docker mode and never switches without -SwitchDocker' {
             Invoke-Validator | Out-Null
             $global:TT.Docker | Should -Be @('assert')

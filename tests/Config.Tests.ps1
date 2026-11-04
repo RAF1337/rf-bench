@@ -46,6 +46,28 @@ Describe 'Get-BenchConfig' {
         $p = New-TempConfig { param($c) $c.Auth.Mode = 'foo' }
         { Get-BenchConfig -Path $p } | Should -Throw '*auth.mode*'
     }
+    It 'overlays bench.local.json from the same folder on bench.json' {
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory $dir | Out-Null
+        $p = Join-Path $dir 'bench.json'
+        Copy-Item (Join-Path $PSScriptRoot '..\config\bench.json') $p
+        Set-Content (Join-Path $dir 'bench.local.json') '{ "Bc": { "CompilerFolder": "%RFB_TEST_DIR%\\compiler" }, "Claude": { "MaxTurns": 9 } }'
+        $env:RFB_TEST_DIR = 'C:\rfb'
+        $c = Get-BenchConfig -Path $p
+        $c.Bc.CompilerFolder | Should -Be 'C:\rfb\compiler'
+        $c.Claude.MaxTurns | Should -Be 9
+        $c.Bc.ContainerName | Should -Be 'rfbench'
+        $c.Bc.Credential.User | Should -Be 'admin'
+        $c.Claude.MaxAttempts | Should -Be 3
+    }
+    It 'throws naming bench.local.json when it is not valid JSON' {
+        $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory $dir | Out-Null
+        $p = Join-Path $dir 'bench.json'
+        Copy-Item (Join-Path $PSScriptRoot '..\config\bench.json') $p
+        Set-Content (Join-Path $dir 'bench.local.json') '{ broken'
+        { Get-BenchConfig -Path $p } | Should -Throw '*bench.local.json*'
+    }
     It 'expands environment variables in path values' {
         $env:RFB_TEST_DIR = 'C:\rfb'
         $p = New-TempConfig { param($c) $c.TempRoot = '%RFB_TEST_DIR%\x' }

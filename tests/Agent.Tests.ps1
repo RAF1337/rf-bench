@@ -278,9 +278,46 @@ Describe 'Invoke-ClaudeAttempt' {
         $names | Should -Not -Contain 'ANTHROPIC_API_KEY'
         $names | Should -Not -Contain 'RFB_REMOVE'
         $stub.env.RFB_KEEP | Should -Be 'keep'
-        $stub.env.CLAUDE_CODE_OAUTH_TOKEN | Should -Be 'run-token'
+        # The run token reached the child; the transcript holds it redacted (an inherited token would not be).
+        $stub.env.CLAUDE_CODE_OAUTH_TOKEN | Should -Be '<redacted>'
         $stub.env.CLAUDE_CONFIG_DIR | Should -Be 'C:\rfb-runs\x\claude-home'
         $stub.env.DISABLE_AUTOUPDATER | Should -Be '1'
+    }
+
+    It 'keeps an inherited CLAUDE_CODE_GIT_BASH_PATH' {
+        $saved = $env:CLAUDE_CODE_GIT_BASH_PATH
+        $env:CLAUDE_CODE_GIT_BASH_PATH = 'C:\Program Files\Git\bin\bash.exe'
+        try {
+            $cmd = New-Stub 'echo-stub-gitbash.ps1' $script:EchoStub
+            $t = Join-Path $TestDrive 'gitbash.jsonl'
+            $null = Invoke-ClaudeAttempt -Env @{ CLAUDE_CONFIG_DIR = 'C:\h' } -Ws $script:Ws -Prompt 'p' -Model 'm' -MaxTurns 1 -TimeoutMinutes 2 `
+                -McpConfigPath 'c.json' -McpMode 'open' -ResumeSessionId '' -TranscriptPath $t -ClaudeCommand $cmd
+        }
+        finally { $env:CLAUDE_CODE_GIT_BASH_PATH = $saved }
+        $stub = Get-Content $t | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object type -EQ 'stub'
+        $stub.env.CLAUDE_CODE_GIT_BASH_PATH | Should -Be 'C:\Program Files\Git\bin\bash.exe'
+    }
+
+    It 'redacts the auth secret from the transcript and the stderr file' {
+        $body = @'
+$tok = $env:CLAUDE_CODE_OAUTH_TOKEN
+[Console]::Out.WriteLine((ConvertTo-Json -Compress @{ type = 'system'; subtype = 'init'; session_id = 's'; model = 'm'; claude_code_version = '9.9.9'; mcp_servers = @() }))
+[Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 6 @{ type = 'user'; message = @{ content = @(@{ type = 'tool_result'; tool_use_id = 'x'; content = "env: CLAUDE_CODE_OAUTH_TOKEN=$tok" }) } }))
+[Console]::Out.WriteLine((ConvertTo-Json -Compress @{ type = 'result'; subtype = 'success'; is_error = $false; num_turns = 1; session_id = 's' }))
+[Console]::Error.WriteLine("token was $tok")
+'@
+        $cmd = New-Stub 'secret-stub.ps1' $body
+        $t = Join-Path $TestDrive 'secret.jsonl'
+        $secret = 'sk-ant-oat01-SECRET-' + [guid]::NewGuid().ToString('N')
+        $r = Invoke-ClaudeAttempt -Env @{ CLAUDE_CODE_OAUTH_TOKEN = $secret; ANTHROPIC_API_KEY = $null } -Ws $script:Ws -Prompt 'p' -Model 'm' -MaxTurns 1 `
+            -TimeoutMinutes 2 -McpConfigPath 'c.json' -McpMode 'open' -ResumeSessionId '' -TranscriptPath $t -ClaudeCommand $cmd
+        $r.SessionId | Should -Be 's'
+        $text = Get-Content $t -Raw
+        $text | Should -Not -Match ([regex]::Escape($secret))
+        $text | Should -Match ([regex]::Escape('CLAUDE_CODE_OAUTH_TOKEN=<redacted>'))
+        $err = Get-Content "$t.stderr.txt" -Raw
+        $err | Should -Not -Match ([regex]::Escape($secret))
+        $err | Should -Match 'token was <redacted>'
     }
 
     It 'sends a very long prompt on stdin' {

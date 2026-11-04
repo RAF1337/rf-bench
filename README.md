@@ -13,7 +13,7 @@ PowerShell benchmark that measures Claude Code harnesses (profiles) on Business 
 
 ## Configuration
 
-All settings live in `config/bench.json`. `Get-BenchConfig` (in `src/Config.psm1`) loads and validates it and expands `%TEMP%` style variables.
+All settings live in `config/bench.json`. Machine-specific values go in `config/bench.local.json` (gitignored), which uses the same shape and only needs the keys it overrides; `src/Initialize-Backend.ps1` writes `Bc.CompilerFolder` there. `Get-BenchConfig` (in `src/Config.psm1`) loads `bench.json`, overlays `bench.local.json` from the same folder (nested objects are merged, other values replace), validates the result and expands `%TEMP%` style variables.
 
 ## Tests
 

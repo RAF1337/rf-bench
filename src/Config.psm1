@@ -45,12 +45,36 @@ function Expand-ConfigValue($Value) {
     return $Value
 }
 
+# Copies every property of $Overlay onto $Base; nested objects are merged, other values replace.
+function Merge-ConfigObject($Base, $Overlay) {
+    foreach ($p in $Overlay.PSObject.Properties) {
+        $cur = $Base.PSObject.Properties[$p.Name]
+        if ($cur -and $cur.Value -is [System.Management.Automation.PSCustomObject] -and $p.Value -is [System.Management.Automation.PSCustomObject]) {
+            Merge-ConfigObject $cur.Value $p.Value
+        }
+        elseif ($cur) { $cur.Value = $p.Value }
+        else { $Base | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value }
+    }
+}
+
+# Machine-specific values (written by Initialize-Backend, gitignored) live next to bench.json.
+function Get-LocalConfigPath([string]$Path) {
+    Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($Path))) 'bench.local.json'
+}
+
 function Get-BenchConfig {
     [CmdletBinding()]
     param([string]$Path = (Join-Path $script:RepoRoot 'config/bench.json'))
 
     if (-not (Test-Path -LiteralPath $Path)) { throw "bench.json: file not found: $Path" }
     $cfg = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $local = Get-LocalConfigPath $Path
+    if (Test-Path -LiteralPath $local -PathType Leaf) {
+        try { $overlay = Get-Content -LiteralPath $local -Raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { throw "bench.local.json: invalid JSON in $local ($($_.Exception.Message))" }
+        if ($overlay -is [System.Management.Automation.PSCustomObject]) { Merge-ConfigObject $cfg $overlay }
+        elseif ($null -ne $overlay) { throw "bench.local.json: $local must hold a JSON object" }
+    }
 
     foreach ($key in $script:RequiredKeys) {
         $node = $cfg
@@ -71,4 +95,4 @@ function Get-BenchConfig {
     $cfg
 }
 
-Export-ModuleMember -Function Get-BenchConfig, Get-CanonicalPath
+Export-ModuleMember -Function Get-BenchConfig, Get-CanonicalPath, Get-LocalConfigPath
