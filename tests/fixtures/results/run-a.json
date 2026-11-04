@@ -1,0 +1,401 @@
+{
+  "runId": "20261104-100000-baseline",
+  "startedUtc": "2026-11-04T10:00:00.0000000Z",
+  "profile": {
+    "name": "baseline",
+    "hash": "aaa"
+  },
+  "model": "claude-opus-5-5",
+  "maxTurns": 60,
+  "auth": {
+    "mode": "subscription"
+  },
+  "mcp": {
+    "mode": "strict",
+    "allowed": [],
+    "installedPlugins": []
+  },
+  "versions": {
+    "cli": "2.1.300",
+    "bcArtifact": "Sandbox/w1/29.0.54011.57417",
+    "compiler": {
+      "path": "C:\\alc.exe",
+      "version": "18.1.2842859"
+    },
+    "alParserDll": "C:\\x.dll",
+    "pwsh": "7.6.8"
+  },
+  "tasks": [
+    {
+      "taskId": "T001",
+      "repeat": 1,
+      "status": "done",
+      "abortReason": null,
+      "leak": {
+        "leaked": false,
+        "hits": []
+      },
+      "firstTestsPassAttempt": 1,
+      "fullyRightAttempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "agent": {
+            "SessionId": "sess",
+            "ExitCode": 0,
+            "Status": "ok",
+            "AbortReason": null,
+            "CostUsd": 0.5,
+            "InputTokens": 1000,
+            "OutputTokens": 200,
+            "CacheReadTokens": 5000,
+            "CacheCreationTokens": 100,
+            "Turns": 10,
+            "DurationMs": 60000,
+            "Model": "claude-opus-5-5",
+            "CliVersion": "2.1.300",
+            "McpServers": [],
+            "ToolUses": [
+              {
+                "Tool": "Edit",
+                "Count": 4
+              }
+            ],
+            "IsError": false,
+            "ResultSubtype": "success",
+            "TranscriptPath": "attempt.jsonl"
+          },
+          "grade": {
+            "Compiled": true,
+            "CompileErrors": [],
+            "AnalyzerWarnings": {
+              "AA0137": 2
+            },
+            "Tests": [
+              {
+                "Codeunit": "Tests",
+                "Name": "Main",
+                "Passed": true,
+                "Message": null,
+                "CallStack": null,
+                "IsBudget": false
+              }
+            ],
+            "TestsPassed": true,
+            "BudgetsPassed": true,
+            "Findings": [],
+            "ChecksPassed": true,
+            "FullyRight": true
+          },
+          "feedback": "",
+          "mcp": {
+            "available": [],
+            "foundByClaude": []
+          }
+        }
+      ]
+    },
+    {
+      "taskId": "T002",
+      "repeat": 1,
+      "status": "done",
+      "abortReason": null,
+      "leak": {
+        "leaked": false,
+        "hits": []
+      },
+      "firstTestsPassAttempt": 2,
+      "fullyRightAttempt": null,
+      "attempts": [
+        {
+          "n": 1,
+          "agent": {
+            "SessionId": "sess",
+            "ExitCode": 0,
+            "Status": "ok",
+            "AbortReason": null,
+            "CostUsd": 0.25,
+            "InputTokens": 1000,
+            "OutputTokens": 200,
+            "CacheReadTokens": 5000,
+            "CacheCreationTokens": 100,
+            "Turns": 10,
+            "DurationMs": 60000,
+            "Model": "claude-opus-5-5",
+            "CliVersion": "2.1.300",
+            "McpServers": [],
+            "ToolUses": [],
+            "IsError": false,
+            "ResultSubtype": "success",
+            "TranscriptPath": "attempt.jsonl"
+          },
+          "grade": {
+            "Compiled": false,
+            "CompileErrors": [
+              "app/X.al(3,1): error AL0104: Syntax error, 'end' expected"
+            ],
+            "AnalyzerWarnings": {},
+            "Tests": [
+              {
+                "Codeunit": "Tests",
+                "Name": "Main",
+                "Passed": false,
+                "Message": "Assert failed <expected>",
+                "CallStack": null,
+                "IsBudget": false
+              }
+            ],
+            "TestsPassed": false,
+            "BudgetsPassed": false,
+            "Findings": [],
+            "ChecksPassed": false,
+            "FullyRight": false
+          },
+          "feedback": "compile errors",
+          "mcp": {
+            "available": [],
+            "foundByClaude": []
+          }
+        },
+        {
+          "n": 2,
+          "agent": {
+            "SessionId": "sess",
+            "ExitCode": 0,
+            "Status": "ok",
+            "AbortReason": null,
+            "CostUsd": 0.25,
+            "InputTokens": 1000,
+            "OutputTokens": 200,
+            "CacheReadTokens": 5000,
+            "CacheCreationTokens": 100,
+            "Turns": 10,
+            "DurationMs": 60000,
+            "Model": "claude-opus-5-5",
+            "CliVersion": "2.1.300",
+            "McpServers": [],
+            "ToolUses": [],
+            "IsError": false,
+            "ResultSubtype": "success",
+            "TranscriptPath": "attempt.jsonl"
+          },
+          "grade": {
+            "Compiled": true,
+            "CompileErrors": [],
+            "AnalyzerWarnings": {},
+            "Tests": [
+              {
+                "Codeunit": "Tests",
+                "Name": "Main",
+                "Passed": true,
+                "Message": null,
+                "CallStack": null,
+                "IsBudget": false
+              }
+            ],
+            "TestsPassed": true,
+            "BudgetsPassed": true,
+            "Findings": [
+              {
+                "Check": "SetLoadFieldsBeforeFind",
+                "Category": "data-access",
+                "File": "app/Src.al",
+                "Line": 12,
+                "Passed": false,
+                "Detail": "detail"
+              }
+            ],
+            "ChecksPassed": false,
+            "FullyRight": false
+          },
+          "feedback": "Standards: data-access",
+          "mcp": {
+            "available": [],
+            "foundByClaude": []
+          }
+        },
+        {
+          "n": 3,
+          "agent": {
+            "SessionId": "sess",
+            "ExitCode": 0,
+            "Status": "ok",
+            "AbortReason": null,
+            "CostUsd": 0.25,
+            "InputTokens": 1000,
+            "OutputTokens": 200,
+            "CacheReadTokens": 5000,
+            "CacheCreationTokens": 100,
+            "Turns": 10,
+            "DurationMs": 60000,
+            "Model": "claude-opus-5-5",
+            "CliVersion": "2.1.300",
+            "McpServers": [],
+            "ToolUses": [],
+            "IsError": false,
+            "ResultSubtype": "success",
+            "TranscriptPath": "attempt.jsonl"
+          },
+          "grade": {
+            "Compiled": true,
+            "CompileErrors": [],
+            "AnalyzerWarnings": {
+              "AA0137": 1,
+              "AA0021": 3
+            },
+            "Tests": [
+              {
+                "Codeunit": "Tests",
+                "Name": "Main",
+                "Passed": true,
+                "Message": null,
+                "CallStack": null,
+                "IsBudget": false
+              }
+            ],
+            "TestsPassed": true,
+            "BudgetsPassed": true,
+            "Findings": [
+              {
+                "Check": "SetLoadFieldsBeforeFind",
+                "Category": "data-access",
+                "File": "app/Src.al",
+                "Line": 12,
+                "Passed": false,
+                "Detail": "detail"
+              },
+              {
+                "Check": "NoCommitInLogic",
+                "Category": "transactions",
+                "File": "app/Src.al",
+                "Line": 12,
+                "Passed": false,
+                "Detail": "detail"
+              }
+            ],
+            "ChecksPassed": false,
+            "FullyRight": false
+          },
+          "feedback": "Standards: data-access, transactions",
+          "mcp": {
+            "available": [],
+            "foundByClaude": []
+          }
+        }
+      ]
+    },
+    {
+      "taskId": "T003",
+      "repeat": 1,
+      "status": "invalid",
+      "abortReason": null,
+      "leak": {
+        "leaked": true,
+        "hits": [
+          {
+            "Kind": "repo-root",
+            "Pattern": "c:\\rf-bench",
+            "Tool": "Bash",
+            "Source": "tool_use",
+            "Excerpt": "Get-Content <script>alert(\"x\")</script> & more"
+          }
+        ]
+      },
+      "firstTestsPassAttempt": 1,
+      "fullyRightAttempt": 1,
+      "attempts": [
+        {
+          "n": 1,
+          "agent": {
+            "SessionId": "sess",
+            "ExitCode": 0,
+            "Status": "ok",
+            "AbortReason": null,
+            "CostUsd": 1.0,
+            "InputTokens": 1000,
+            "OutputTokens": 200,
+            "CacheReadTokens": 5000,
+            "CacheCreationTokens": 100,
+            "Turns": 10,
+            "DurationMs": 60000,
+            "Model": "claude-opus-5-5",
+            "CliVersion": "2.1.300",
+            "McpServers": [],
+            "ToolUses": [],
+            "IsError": false,
+            "ResultSubtype": "success",
+            "TranscriptPath": "attempt.jsonl"
+          },
+          "grade": {
+            "Compiled": true,
+            "CompileErrors": [],
+            "AnalyzerWarnings": {},
+            "Tests": [
+              {
+                "Codeunit": "Tests",
+                "Name": "Main",
+                "Passed": true,
+                "Message": null,
+                "CallStack": null,
+                "IsBudget": false
+              }
+            ],
+            "TestsPassed": true,
+            "BudgetsPassed": true,
+            "Findings": [],
+            "ChecksPassed": true,
+            "FullyRight": true
+          },
+          "feedback": "",
+          "mcp": {
+            "available": [],
+            "foundByClaude": []
+          }
+        }
+      ]
+    },
+    {
+      "taskId": "T004",
+      "repeat": 1,
+      "status": "aborted",
+      "abortReason": "timeout",
+      "leak": {
+        "leaked": false,
+        "hits": []
+      },
+      "firstTestsPassAttempt": null,
+      "fullyRightAttempt": null,
+      "attempts": [
+        {
+          "n": 1,
+          "agent": {
+            "SessionId": "sess",
+            "ExitCode": 0,
+            "Status": "aborted",
+            "AbortReason": "timeout",
+            "CostUsd": null,
+            "InputTokens": 1000,
+            "OutputTokens": 200,
+            "CacheReadTokens": 5000,
+            "CacheCreationTokens": 100,
+            "Turns": 10,
+            "DurationMs": 60000,
+            "Model": "claude-opus-5-5",
+            "CliVersion": "2.1.300",
+            "McpServers": [],
+            "ToolUses": [],
+            "IsError": false,
+            "ResultSubtype": "success",
+            "TranscriptPath": "attempt.jsonl"
+          },
+          "grade": null,
+          "feedback": "",
+          "mcp": {
+            "available": [],
+            "foundByClaude": []
+          }
+        }
+      ]
+    }
+  ]
+}
