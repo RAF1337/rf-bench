@@ -1,0 +1,1 @@
+[{"check":"NoCommitIn","category":"transactions","params":{"procedures":["Post"]}},{"check":"NoFindMinus","category":"data-access","params":{}}]
