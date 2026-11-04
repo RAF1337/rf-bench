@@ -6,6 +6,8 @@ Set-StrictMode -Version Latest
 # standards findings are reduced to a scenario name or a category: no check names, files,
 # lines, numbers or details.
 
+$script:Categories = @('data-access', 'locking-isolation', 'transactions', 'architecture', 'naming-style', 'ui', 'error-handling')
+
 function New-AttemptFeedback {
     [CmdletBinding()]
     param([Parameter(Mandatory, Position = 0)][object]$Grade)
@@ -38,8 +40,17 @@ function New-AttemptFeedback {
         $sections.Add($lines -join "`n")
     }
 
-    $categories = @($Grade.Findings | Where-Object { $_ -and -not $_.Passed } |
-            ForEach-Object { [string]$_.Category } | Sort-Object -Unique)
+    # Only the fixed category names may reach the agent; anything else could carry a check name.
+    $known = foreach ($f in @($Grade.Findings | Where-Object { $_ -and -not $_.Passed })) {
+        $c = [string]$f.Category
+        if ([string]::IsNullOrWhiteSpace($c)) { continue }
+        if ($c -cnotin $script:Categories) {
+            Write-Verbose "Feedback: ignoring unknown standards category '$c' (check '$($f.Check)')."
+            continue
+        }
+        $c
+    }
+    $categories = @($known | Sort-Object -Unique)
     if ($categories.Count -gt 0) {
         $sections.Add("Coding standards issues found in: $($categories -join ', ').")
     }

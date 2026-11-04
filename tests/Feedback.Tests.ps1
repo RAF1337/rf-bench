@@ -101,6 +101,33 @@ Describe 'New-AttemptFeedback' {
         ($i | Sort-Object) | Should -Be $i
     }
 
+    It 'lists an app publish failure under failing tests' {
+        $g = New-Grade -Tests @(New-Test 'App' $false 'Publishing your app failed: install error' $null)
+        $g.Tests[0].Codeunit = 'Publish'
+        $text = New-AttemptFeedback $g
+        $text | Should -Match ([regex]::Escape("Failing tests:`nPublish::App: Publishing your app failed: install error"))
+    }
+
+    It 'ignores empty and unknown categories with a verbose note' {
+        $g = New-Grade -Findings @(
+            New-TestFinding 'NoCommitIn' 'transactions'
+            New-TestFinding 'NoFindMinus' ''
+            New-TestFinding 'Secret' 'RequiresSetLoadFieldsBeforeRead'
+        )
+        $all = @(New-AttemptFeedback $g -Verbose 4>&1)
+        $text = @($all | Where-Object { $_ -is [string] }) -join "`n"
+        $verbose = @($all | Where-Object { $_ -is [System.Management.Automation.VerboseRecord] })
+        $text | Should -Match ([regex]::Escape('Coding standards issues found in: transactions.'))
+        $text | Should -Not -Match 'RequiresSetLoadFieldsBeforeRead'
+        $verbose.Count | Should -BeGreaterThan 0
+        ($verbose.Message -join ' ') | Should -Match 'RequiresSetLoadFieldsBeforeRead'
+    }
+
+    It 'omits the standards section when only unknown categories failed' {
+        $text = New-AttemptFeedback (New-Grade -Findings @(New-TestFinding 'X' 'bogus'))
+        $text | Should -Not -Match 'Coding standards'
+    }
+
     It 'ends with the closing line' {
         $text = New-AttemptFeedback (New-Grade -Findings @(New-TestFinding 'NoCommitIn' 'transactions'))
         ($text -split "`r?`n")[-1] | Should -Be 'Fix the issues and finish again.'

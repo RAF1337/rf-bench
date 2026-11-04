@@ -196,6 +196,65 @@ Describe 'Invoke-Grade' {
         )
     }
 
+    It 'grades a publish failure of the agent app as a failing pseudo-test' {
+        Set-BackendMocks
+        Mock -ModuleName Grader Publish-BenchApp {
+            $script:Calls.Add("publish:$(Split-Path $AppFile -Leaf)")
+            throw "Install codeunit failed for $AppFile"
+        }
+        Mock -ModuleName Grader Invoke-AlChecks { @((New-TestFinding $false)) }
+        $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
+        $g.Compiled | Should -BeTrue
+        @($g.Tests).Count | Should -Be 1
+        $g.Tests[0].Codeunit | Should -Be 'Publish'
+        $g.Tests[0].Name | Should -Be 'App'
+        $g.Tests[0].Passed | Should -BeFalse
+        $g.Tests[0].Message | Should -Match 'Install codeunit failed'
+        $g.Tests[0].Message | Should -Not -Match ([regex]::Escape($script:Grader))
+        $g.TestsPassed | Should -BeFalse
+        $g.ChecksPassed | Should -BeFalse
+        @($g.Findings).Count | Should -Be 1
+        $g.FullyRight | Should -BeFalse
+        Should -Invoke -ModuleName Grader Invoke-AlChecks -Times 1 -Exactly
+        Should -Invoke -ModuleName Grader Invoke-BenchTests -Times 0 -Exactly
+        $script:CompileArgs.Count | Should -Be 1
+        $script:Calls | Should -Be @(
+            "remove:$script:TestAppId", "remove:$script:AppId", 'publish:TX01.app',
+            "remove:$script:TestAppId", "remove:$script:AppId"
+        )
+    }
+
+    It 'never leaves an absolute grader path in compile errors' {
+        Set-BackendMocks
+        Mock -ModuleName Grader Invoke-AlCompile {
+            $fwd = $OutFile -replace '\\', '/'
+            throw "The process cannot access the file '$OutFile' because it is being used by another process ($fwd)."
+        }
+        $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 3
+        $g.Compiled | Should -BeFalse
+        $text = $g.CompileErrors -join "`n"
+        $text | Should -Match ([regex]::Escape('<build>\out\TX01.app'))
+        $text | Should -Match ([regex]::Escape('<build>/out/TX01.app'))
+        $text | Should -Not -Match ([regex]::Escape($script:Grader))
+        $text | Should -Not -Match ([regex]::Escape(($script:Grader -replace '\\', '/')))
+    }
+
+    It 'throws when the test app compile throws, after removing both apps' {
+        Set-BackendMocks
+        Mock -ModuleName Grader Invoke-AlCompile {
+            if ($AppDir -like '*tests') { throw 'alc.exe not found' }
+            New-Item -ItemType Directory (Split-Path $OutFile -Parent) -Force | Out-Null
+            Set-Content -LiteralPath $OutFile 'app'
+            [pscustomobject]@{ Success = $true; Errors = @(); Warnings = @(); AppFile = $OutFile }
+        }
+        { Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1 } |
+            Should -Throw '*alc.exe not found*'
+        $script:Calls | Should -Be @(
+            "remove:$script:TestAppId", "remove:$script:AppId", 'publish:TX01.app',
+            "remove:$script:TestAppId", "remove:$script:AppId"
+        )
+    }
+
     It 'is fully right when everything passes' {
         Set-BackendMocks
         $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
