@@ -20,6 +20,17 @@ Describe 'Get-BenchConfig' {
     It 'sets RepoRoot to the repo root' {
         (Get-BenchConfig).RepoRoot | Should -Be (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
     }
+    It 'canonicalises RepoRoot to on-disk casing' {
+        $root = (Get-BenchConfig).RepoRoot
+        $parts = $root.Split('\')
+        $parts[0] | Should -BeExactly $parts[0].ToUpperInvariant()
+        $cur = $parts[0] + '\'
+        foreach ($seg in $parts[1..($parts.Count - 1)]) {
+            $onDisk = (Get-ChildItem -LiteralPath $cur -Force | Where-Object Name -EQ $seg).Name
+            $seg | Should -BeExactly $onDisk
+            $cur = Join-Path $cur $seg
+        }
+    }
     It 'pins an exact BC version' {
         (Get-BenchConfig).Bc.Version | Should -Match '^\d+\.\d+\.\d+\.\d+$'
     }

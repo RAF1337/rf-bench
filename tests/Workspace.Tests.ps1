@@ -56,7 +56,8 @@ Describe 'New-RunWorkspace' {
         $w.Root | Should -Be (Join-Path $cfg.TempRoot 'r1\TX01\2')
         $w.Ws | Should -Be (Join-Path $w.Root 'ws')
         $w.ClaudeHome | Should -Be (Join-Path $w.Root 'claude-home')
-        $w.GraderDir | Should -Be (Join-Path $w.Root 'grader')
+        $w.GraderDir | Should -Be (Join-Path $cfg.TempRoot 'r1\_grader\TX01\2')
+        $w.GraderDir.StartsWith($w.Root, [StringComparison]::OrdinalIgnoreCase) | Should -BeFalse
         Join-Path $w.Ws 'TASK.md' | Should -Exist
         Join-Path $w.Ws 'app\app.json' | Should -Exist
         Join-Path $w.Ws 'app\src\Starter.Codeunit.al' | Should -Exist
@@ -103,6 +104,36 @@ Describe 'New-RunWorkspace' {
         $w = New-RunWorkspace -Config $cfg -Task $task -RunId 'r1' -Repeat 1
         Join-Path $w.ClaudeHome 'stale.json' | Should -Not -Exist
         Join-Path $w.Ws 'stale.txt' | Should -Not -Exist
+    }
+
+    It 'cleans the grader folder of the repeat too' {
+        $cfg = New-TestConfig
+        $task = Get-BenchTask $script:Fixture
+        $w = New-RunWorkspace -Config $cfg -Task $task -RunId 'r1' -Repeat 1
+        Set-Content (Join-Path $w.GraderDir 'stale.app') 'x'
+        $w = New-RunWorkspace -Config $cfg -Task $task -RunId 'r1' -Repeat 1
+        @(Get-ChildItem $w.GraderDir -Force).Count | Should -Be 0
+    }
+
+    It 'refuses a RunId that escapes TempRoot and deletes nothing' {
+        $cfg = New-TestConfig
+        $escaped = [IO.Path]::GetFullPath((Join-Path $cfg.TempRoot '..\..\TX01\1'))
+        New-Item -ItemType Directory $escaped -Force | Out-Null
+        Set-Content (Join-Path $escaped 'keep.txt') 'keep'
+        { New-RunWorkspace -Config $cfg -Task (Get-BenchTask $script:Fixture) -RunId '..\..' -Repeat 1 } |
+            Should -Throw '*outside TempRoot*'
+        Join-Path $escaped 'keep.txt' | Should -Exist
+    }
+
+    It 'refuses a RunId that resolves to TempRoot itself' {
+        $cfg = New-TestConfig
+        # TempRoot ending in TX01\1 lets RunId '..\..' resolve the repeat folder to TempRoot itself.
+        $cfg.TempRoot = Join-Path $TestDrive 'base\TX01\1'
+        New-Item -ItemType Directory $cfg.TempRoot -Force | Out-Null
+        Set-Content (Join-Path $cfg.TempRoot 'keep.txt') 'keep'
+        { New-RunWorkspace -Config $cfg -Task (Get-BenchTask $script:Fixture) -RunId '..\..' -Repeat 1 } |
+            Should -Throw '*TempRoot*'
+        Join-Path $cfg.TempRoot 'keep.txt' | Should -Exist
     }
 
     It 'throws when CompilerFolder is not set' {
@@ -350,7 +381,9 @@ Describe 'New-AgentSettings' {
                 "& `"$ws\.alpackages\alc.exe`" /project:`"$ws\app`" /packagecachepath:`"$ws\.alpackages`"",
                 "cd $wsFwd/app && ls",
                 "cd $wsPosix/app && cat app.json",
-                "Get-Content $ws\TASK.md")) {
+                "Get-Content $ws\TASK.md",
+                "Get-Content ..\ws\app\app.json",
+                "cat ./app/src/Starter.Codeunit.al")) {
             Test-Denied $cmd | Should -BeFalse -Because $cmd
         }
         $repo = $script:Cfg.RepoRoot
@@ -359,9 +392,32 @@ Describe 'New-AgentSettings' {
                 "cat $($repo -replace '\\', '/')/tasks/T001/task.json",
                 "ls $(ConvertTo-PermPath $repo)/tasks",
                 "cat $((ConvertTo-PermPath $repo) -replace '^//', '/')/tasks/T001/task.json",
-                "dir $($script:W.GraderDir)\tests")) {
+                "dir $($script:W.GraderDir)\tests",
+                "Get-Content ..\grader\x",
+                "cat ../grader/x",
+                "Get-Content ..\..\..\_grader\TX01\1\x",
+                "cat ../_grader/x")) {
             Test-Denied $cmd | Should -BeTrue -Because $cmd
         }
+    }
+
+    It 'Bash deny rules match the repo path in on-disk and lower casing, case-sensitively' {
+        $cfg = New-TestConfig
+        $canonical = $cfg.RepoRoot
+        $cfg.RepoRoot = $canonical.ToUpperInvariant()   # wrong casing in, canonical casing out
+        New-AgentSettings $cfg (Get-BenchProfile (New-ProfileDir 'case' @{})) $script:W | Out-Null
+        $deny = (Get-Settings).permissions.deny
+        $bash = @($deny | Where-Object { $_ -like 'Bash(*' } | ForEach-Object { $_ -replace '^Bash\((.*)\)$', '$1' })
+        function Test-BashDenied([string]$Cmd) { [bool]($bash | Where-Object { $Cmd -clike $_ }) }
+
+        $deny | Should -Contain "Read($($canonical -replace '\\', '/')/**)"
+        foreach ($root in $canonical, $canonical.ToLowerInvariant()) {
+            Test-BashDenied "cat $root\tasks\T001\task.json" | Should -BeTrue -Because $root
+            Test-BashDenied "cat $($root -replace '\\', '/')/tasks/T001/task.json" | Should -BeTrue -Because $root
+            $posix = '/' + $root.Substring(0, 1).ToLowerInvariant() + ($root.Substring(2) -replace '\\', '/')
+            Test-BashDenied "cat $posix/tasks/T001/task.json" | Should -BeTrue -Because $posix
+        }
+        Test-BashDenied "cat $($script:W.Ws)\app\app.json" | Should -BeFalse
     }
 
     It 'denies web unless allowWeb' {

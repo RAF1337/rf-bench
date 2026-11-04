@@ -64,13 +64,20 @@ Bare tool names (`Read`) and relative paths are kept; deny still wins at runtime
 - `permissions.deny`:
   - `Read(<repo>/**)`, `Edit(<repo>/**)` in two spellings: `C:/GeneralDev/AL/rf-bench/**` and
     the documented absolute form `//c/GeneralDev/AL/rf-bench/**`;
-  - the same `Read`/`Edit` pair for the run's `grader` folder;
+  - the same `Read`/`Edit` pair for the repeat's grader folder
+    `<TempRoot>\<runId>\_grader\<taskId>\<repeat>` and for the run's `<TempRoot>\<runId>\_grader`
+    (other tasks of the same run). The grader folder is deliberately not next to `ws`;
   - `Edit(<ws>/.claude/settings*.json)` and `Edit(<claude-home>/settings*.json)` so the agent
     cannot remove these rules (`bypassPermissions` otherwise allows writes to `.claude/`);
-  - `Bash(*<path>*)` and `PowerShell(*<path>*)` for the repo root and the run's grader folder,
+  - `Bash(*<path>*)` and `PowerShell(*<path>*)` for the repo root and both grader folders,
     each in four spellings: `C:\GeneralDev\AL\rf-bench`, `C:/GeneralDev/AL/rf-bench`,
-    `//c/GeneralDev/AL/rf-bench`, `/c/GeneralDev/AL/rf-bench`. Never a bare word such as
-    `rf-bench`, which could also match the workspace path and block legitimate commands;
+    `//c/GeneralDev/AL/rf-bench`, `/c/GeneralDev/AL/rf-bench`. `Bash` rules also get the
+    all-lower-case spelling of each, since Bash matching may be case-sensitive. Paths use
+    on-disk casing (`Get-CanonicalPath`). Never a bare word such as `rf-bench`, which could
+    also match the workspace path and block legitimate commands;
+  - relative grader references: `Bash`/`PowerShell` with `*\grader*`, `*/grader*`,
+    `*\_grader*`, `*/_grader*`. Side effect: a workspace file whose path has a folder or file
+    name starting with `grader` cannot be named in a shell command;
   - `WebFetch`, `WebSearch` unless `allowWeb: true`.
 - `disableClaudeAiConnectors: true` in `strict` mode.
 - `claudeMdExcludes`: `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/CLAUDE.md`,

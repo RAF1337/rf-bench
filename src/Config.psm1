@@ -1,7 +1,29 @@
 #Requires -Version 7.6
 Set-StrictMode -Version Latest
 
-$script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+# Returns a drive path with the on-disk casing of every existing segment and an upper-case
+# drive letter (C:\GeneralDev\AL\rf-bench), so deny rules built from it match what tools see.
+# Segments that do not exist yet keep the given casing. Non-drive paths are returned as-is.
+function Get-CanonicalPath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    if ($full -notmatch '^[A-Za-z]:') { return $full }
+    $cur = $full.Substring(0, 2).ToUpperInvariant() + '\'
+    $rest = $full.Substring(2).Trim('\')
+    if (-not $rest) { return $cur }
+    foreach ($seg in $rest.Split('\')) {
+        $name = $seg
+        if (Test-Path -LiteralPath $cur -PathType Container) {
+            $hit = [IO.DirectoryInfo]::new($cur).EnumerateFileSystemInfos($seg) | Select-Object -First 1
+            if ($hit) { $name = $hit.Name }
+        }
+        $cur = Join-Path $cur $name
+    }
+    $cur
+}
+
+$script:RepoRoot = Get-CanonicalPath (Join-Path $PSScriptRoot '..')
 
 $script:RequiredKeys = @(
     'TempRoot'
@@ -49,4 +71,4 @@ function Get-BenchConfig {
     $cfg
 }
 
-Export-ModuleMember -Function Get-BenchConfig
+Export-ModuleMember -Function Get-BenchConfig, Get-CanonicalPath

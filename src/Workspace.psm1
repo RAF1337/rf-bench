@@ -7,6 +7,8 @@ Set-StrictMode -Version Latest
 # - CLAUDE_CONFIG_DIR is a fresh folder per run, so the user's ~/.claude never loads;
 # - runner deny rules are merged last into the workspace project settings.
 
+Import-Module (Join-Path $PSScriptRoot 'Config.psm1')
+
 $script:McpModes = @('strict', 'open')
 
 function Get-Prop($Obj, [string]$Name) {
@@ -59,16 +61,30 @@ function New-RunWorkspace {
         throw "symbols folder not found: $symbols (run src/Initialize-Backend.ps1)"
     }
 
-    $root = [IO.Path]::GetFullPath((Join-Path $Config.TempRoot $RunId $Task.Id ([string]$Repeat)))
-    if (Test-PathUnder $root $Config.RepoRoot) { throw "workspace $root is inside the repo $($Config.RepoRoot); set TempRoot outside it" }
+    $tempRoot = Get-CanonicalPath $Config.TempRoot
+    if (Test-PathUnder $tempRoot $Config.RepoRoot) { throw "TempRoot $tempRoot is inside the repo $($Config.RepoRoot); set TempRoot outside it" }
+    # The grader folder is not next to ws, so no relative path from ws (..\grader) reaches it.
+    $root = [IO.Path]::GetFullPath((Join-Path $tempRoot $RunId $Task.Id ([string]$Repeat)))
+    $grader = [IO.Path]::GetFullPath((Join-Path $tempRoot $RunId '_grader' $Task.Id ([string]$Repeat)))
+    foreach ($p in $root, $grader) {
+        $norm = $p.TrimEnd('\')
+        if (-not (Test-PathUnder $norm $tempRoot) -or $norm -ieq $tempRoot.TrimEnd('\')) {
+            throw "run folder $norm is outside TempRoot $tempRoot (RunId '$RunId')"
+        }
+    }
 
     $ws = Join-Path $root 'ws'
     $home_ = Join-Path $root 'claude-home'
-    $grader = Join-Path $root 'grader'
 
-    # A repeat always starts from a clean folder (no stale config, sessions or files).
-    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+    # A repeat always starts from clean folders (no stale config, sessions, files or grader output).
+    foreach ($p in $root, $grader) {
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
+    }
     New-Item -ItemType Directory $ws, $home_, $grader -Force | Out-Null
+    $root = Get-CanonicalPath $root
+    $ws = Get-CanonicalPath $ws
+    $home_ = Get-CanonicalPath $home_
+    $grader = Get-CanonicalPath $grader
 
     # Only assignment/ is copied. Never the task root, task.json or solution/.
     Copy-DirContent $Task.AssignmentDir $ws
@@ -219,36 +235,44 @@ function Install-Profile {
     [pscustomobject]@{ McpConfigPath = $mcpPath; InstalledPlugins = $installed }
 }
 
-# Spellings of an absolute path as it may appear in a shell command.
-function Get-ShellPathForms([string]$Path) {
-    $win = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+# Spellings of an absolute path as it may appear in a shell command: C:\x, C:/x, //c/x, /c/x.
+# With -Lower also the all-lower-case variants (Bash rules may match case-sensitively).
+function Get-ShellPathForms([string]$Path, [switch]$Lower) {
+    $win = Get-CanonicalPath $Path
     $perm = ConvertTo-PermissionPath $win
-    @($win, ($win -replace '\\', '/'), $perm, ($perm -replace '^//', '/')) | Select-Object -Unique
+    $forms = @($win, ($win -replace '\\', '/'), $perm, ($perm -replace '^//', '/'))
+    if ($Lower) { $forms += $forms | ForEach-Object { $_.ToLowerInvariant() } }
+    @($forms | Select-Object -Unique)
 }
 
 function Get-RunnerDenyRules($Config, $HarnessProfile, $Workspace) {
     $rules = [Collections.Generic.List[string]]::new()
-    foreach ($p in @($Config.RepoRoot)) {
+    $repo = Get-CanonicalPath $Config.RepoRoot
+    $grader = Get-CanonicalPath $Workspace.GraderDir
+    # <TempRoot>\<runId>\_grader: holds the grader folders of every task in the run.
+    $runGraders = Split-Path (Split-Path $grader)
+    foreach ($p in $repo, $grader, $runGraders) {
         # Brief form (forward slashes) plus the documented absolute form (//c/...).
         foreach ($form in (ConvertTo-ForwardPath $p), (ConvertTo-PermissionPath $p)) {
             $rules.Add("Read($form/**)"); $rules.Add("Edit($form/**)")
         }
     }
-    foreach ($form in (ConvertTo-ForwardPath $Workspace.GraderDir), (ConvertTo-PermissionPath $Workspace.GraderDir)) {
-        $rules.Add("Read($form/**)"); $rules.Add("Edit($form/**)")
-    }
     # The agent must not loosen its own settings (bypassPermissions allows writes to .claude/).
-    $rules.Add("Edit($(ConvertTo-PermissionPath $Workspace.Ws)/.claude/settings*.json)")
-    $rules.Add("Edit($(ConvertTo-PermissionPath $Workspace.ClaudeHome)/settings*.json)")
+    $rules.Add("Edit($(ConvertTo-PermissionPath (Get-CanonicalPath $Workspace.Ws))/.claude/settings*.json)")
+    $rules.Add("Edit($(ConvertTo-PermissionPath (Get-CanonicalPath $Workspace.ClaudeHome))/settings*.json)")
     # Shell rules name the full repo and grader paths in every spelling a command may use
-    # (C:\x, C:/x, //c/x, /c/x), never a bare word that could also match the workspace path.
-    foreach ($p in $Config.RepoRoot, $Workspace.GraderDir) {
-        foreach ($form in Get-ShellPathForms $p) {
-            $rules.Add("Bash(*$form*)"); $rules.Add("PowerShell(*$form*)")
-        }
+    # (C:\x, C:/x, //c/x, /c/x; Bash also lower-case), never a bare word such as the repo
+    # name that could also match the workspace path.
+    foreach ($p in $repo, $grader, $runGraders) {
+        foreach ($form in Get-ShellPathForms $p) { $rules.Add("PowerShell(*$form*)") }
+        foreach ($form in Get-ShellPathForms $p -Lower) { $rules.Add("Bash(*$form*)") }
+    }
+    # Relative references to a grader folder (..\grader, ../_grader).
+    foreach ($leaf in '\grader', '/grader', '\_grader', '/_grader') {
+        $rules.Add("Bash(*$leaf*)"); $rules.Add("PowerShell(*$leaf*)")
     }
     if (-not $HarnessProfile.AllowWeb) { $rules.Add('WebFetch'); $rules.Add('WebSearch') }
-    , $rules.ToArray()
+    , @($rules | Select-Object -Unique)
 }
 
 function Split-Rule([string]$Rule) {
