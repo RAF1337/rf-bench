@@ -20,6 +20,13 @@ profiles/<name>/
 | `mcpServers` | object | `{}` | `name -> server config`, same shape as the `mcpServers` object of a Claude Code `.mcp.json`. Written to `<claude-home>/rfbench-mcp.json` as `{"mcpServers": {...}}` and passed with `--mcp-config`. |
 | `plugins` | array | `[]` | `{ "name", "marketplace", "marketplaceSource" }`. For each plugin the runner runs `claude plugin marketplace add <marketplaceSource>` (once per source) and `claude plugin install <name>@<marketplace>` with `CLAUDE_CONFIG_DIR` set to the run's clean config dir, then reads versions from `claude plugin list --json`. `marketplaceSource` is anything `marketplace add` accepts: `owner/repo`, a git or https URL, or a local path. `marketplace` is the marketplace's declared name. |
 
+MCP servers and plugins are set per profile only. `Invoke-Bench.ps1` has no option to add,
+remove or replace them for a run (only `-McpMode` and `-AllowWeb` override profile values);
+to compare a different set, create another profile. A run records each server as a hash of
+its `command`, `args` and `url` (`versions.mcp`, `env` excluded) and each plugin's installed
+version (`versions.plugins`), so runs with different server or plugin versions are flagged in
+the report.
+
 Example:
 
 ```json
@@ -51,7 +58,9 @@ Copied as-is into the workspace (`...\ws`), next to `TASK.md` and `app/`. Typica
 (for example `TASK.md` or `app/app.json`) is refused.
 
 `project/.claude/settings.json` is merged by the runner (see below); every other key in it is
-kept.
+kept. Before every attempt the runner rebuilds `ws/.claude/settings.json` from the profile's
+own `project/.claude/settings.json` (not the workspace copy, which the agent could have
+edited) and deletes `ws/.claude/settings.local.json`.
 
 ## What the runner adds (cannot be loosened by a profile)
 

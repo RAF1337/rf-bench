@@ -15,6 +15,27 @@ PowerShell benchmark that measures Claude Code harnesses (profiles) on Business 
 
 All settings live in `config/bench.json`. Machine-specific values go in `config/bench.local.json` (gitignored), which uses the same shape and only needs the keys it overrides; `src/Initialize-Backend.ps1` writes `Bc.CompilerFolder` there. `Get-BenchConfig` (in `src/Config.psm1`) loads `bench.json`, overlays `bench.local.json` from the same folder (nested objects are merged, other values replace), validates the result and expands `%TEMP%` style variables.
 
+## Results
+
+`src/Invoke-Bench.ps1` writes `results/<runId>/run.json` (saved after every attempt) and the
+attempt transcripts under `results/<runId>/<taskId>/<repeat>/attempt<N>.jsonl` (the auth secret
+is redacted from transcripts and their `.stderr.txt` files). `run.json` shape:
+
+- `runId`, `startedUtc`, `profile{name, hash, allowWeb}`, `model`, `maxTurns`, `auth{mode}`
+- `mcp{mode, allowed[], installedPlugins[]}`: `allowed` = the profile's MCP server names,
+  `installedPlugins` = the profile's plugins as `name@marketplace`
+- `versions`:
+  - `cli`, `bcArtifact`, `compiler{path, version}`, `alParserDll`, `pwsh`
+  - `mcp`: `serverName -> SHA256` of the compact JSON `{command, args, url}` of the profile's
+    server entry (`env` is excluded)
+  - `plugins`: `name@marketplace -> version` (`null` until the plugin is installed)
+  - `managedSettings`: SHA256 of the Claude Code managed settings file
+    (`C:\Program Files\ClaudeCode\managed-settings.json`), `null` when there is none
+- `tasks[]`: `taskId`, `repeat`, `status` (`pending`, `done`, `aborted`, `invalid`),
+  `abortReason` (`timeout`, `rate-limit`, `no-result`, `no-session`, `infra`, `error`),
+  `leak{leaked, hits[]}`, `firstTestsPassAttempt`, `fullyRightAttempt`, `error`,
+  `attempts[]{n, agent, grade, feedback, mcp{available, foundByClaude}}`
+
 ## Tests
 
     pwsh -NoProfile -c "Import-Module Pester -RequiredVersion 5.9.1; Invoke-Pester tests -Output Detailed"

@@ -16,7 +16,7 @@
       "mslearn"
     ],
     "installedPlugins": [
-      "rf-al@1.2.0"
+      "rf-al@rf-market"
     ]
   },
   "versions": {
@@ -27,7 +27,14 @@
       "version": "18.1.2842859"
     },
     "alParserDll": "C:\\x.dll",
-    "pwsh": "7.6.8"
+    "pwsh": "7.6.8",
+    "mcp": {
+      "mslearn": "0f3c1d6e0f3c1d6e0f3c1d6e0f3c1d6e0f3c1d6e0f3c1d6e0f3c1d6e0f3c1d6e"
+    },
+    "plugins": {
+      "rf-al@rf-market": "1.2.0"
+    },
+    "managedSettings": null
   },
   "tasks": [
     {

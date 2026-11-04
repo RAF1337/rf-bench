@@ -149,4 +149,34 @@ function Get-ProfileHash {
     finally { $h.Dispose() }
 }
 
-Export-ModuleMember -Function New-RunRecord, Add-AttemptRecord, Set-TaskOutcome, Save-RunRecord, Get-RunRecord, Get-PendingWork, Get-ProfileHash
+function ConvertTo-Sha256Hex([byte[]]$Bytes) {
+    ([BitConverter]::ToString([Security.Cryptography.SHA256]::HashData($Bytes)) -replace '-', '').ToLowerInvariant()
+}
+
+# Version stamp of one MCP server entry: SHA256 of the compact JSON {command, args, url}.
+# env is left out (it may hold secrets and does not identify the server).
+function Get-McpServerHash {
+    [CmdletBinding()]
+    param([Parameter(Mandatory, Position = 0)]$Server)
+    $a = Get-MemberValue $Server 'args'
+    $o = [ordered]@{
+        command = Get-MemberValue $Server 'command'
+        args    = $(if ($null -ne $a) { , @($a) } else { $null })
+        url     = Get-MemberValue $Server 'url'
+    }
+    ConvertTo-Sha256Hex ([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json $o -Compress -Depth 20)))
+}
+
+# Claude Code managed (enterprise) settings apply to every run on this machine.
+$script:ManagedSettingsPath = Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json'
+
+# SHA256 of the managed settings file, or $null when there is none.
+function Get-ManagedSettingsHash {
+    [CmdletBinding()]
+    param([string]$Path = $script:ManagedSettingsPath)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    ConvertTo-Sha256Hex ([IO.File]::ReadAllBytes($Path))
+}
+
+Export-ModuleMember -Function New-RunRecord, Add-AttemptRecord, Set-TaskOutcome, Save-RunRecord, Get-RunRecord, Get-PendingWork, Get-ProfileHash,
+    Get-McpServerHash, Get-ManagedSettingsHash

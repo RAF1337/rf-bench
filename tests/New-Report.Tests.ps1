@@ -101,11 +101,27 @@ Describe 'New-Report' {
         Invoke-Report @($script:A, $same) | Should -Not -Match 'id="version-mismatch"'
     }
 
-    It 'flags a plugin present in both runs with different versions' {
-        $b2 = Copy-Fixture $script:B { param($j) $j.mcp.installedPlugins = @('rf-al@1.3.0'); $j.versions.cli = '2.1.300' }
+    It 'flags a plugin present in both runs with different versions (versions.plugins)' {
+        $b2 = Copy-Fixture $script:B { param($j) $j.versions.plugins.'rf-al@rf-market' = '1.3.0' }
         $h = Invoke-Report @($script:B, $b2)
         $h | Should -Match 'id="version-mismatch"'
-        $h | Should -Match 'Plugin rf-al'
+        $h | Should -Match 'Plugin rf-al@rf-market'
+        $h | Should -Match '1\.3\.0'
+    }
+
+    It 'does not compare plugin names from installedPlugins as versions' {
+        $b2 = Copy-Fixture $script:B { param($j) $j.mcp.installedPlugins = @('rf-al@other-market') }
+        Invoke-Report @($script:B, $b2) | Should -Not -Match 'id="version-mismatch"'
+    }
+
+    It 'flags differing MCP server hashes' {
+        $b2 = Copy-Fixture $script:B { param($j) $j.versions.mcp.mslearn = 'ffff' }
+        Invoke-Report @($script:B, $b2) | Should -Match 'MCP mslearn'
+    }
+
+    It 'shows plugins of an older run without versions.plugins by name' {
+        $old = Copy-Fixture $script:B { param($j) $j.versions.PSObject.Properties.Remove('plugins') }
+        Get-Cell (Invoke-Report @($old)) 0 'plugins' | Should -Be 'rf-al@rf-market'
     }
 
     It 'flags differing compiler and BC artifact versions' {
@@ -121,7 +137,7 @@ Describe 'New-Report' {
         Get-Cell $script:Html 1 'mcpAllowed' | Should -Be 'mslearn'
         Get-Cell $script:Html 0 'mcpFound' | Should -Be 'none'
         Get-Cell $script:Html 1 'mcpTool:mcp__mslearn__microsoft_docs_search' | Should -Be '3'
-        Get-Cell $script:Html 1 'plugins' | Should -Be 'rf-al@1.2.0'
+        Get-Cell $script:Html 1 'plugins' | Should -Be 'rf-al@rf-market 1.2.0'
     }
 
     It 'shows analyzer warnings per rule and failed checks per category from the final attempt' {

@@ -277,6 +277,7 @@ Describe 'Install-Profile' {
             $r.InstalledPlugins.Count | Should -Be 2
             ($r.InstalledPlugins | Where-Object Name -EQ 'al-rules').Version | Should -Be '1.2.3'
             ($r.InstalledPlugins | Where-Object Name -EQ 'other').Version | Should -Be '0.1.0'
+            ($r.InstalledPlugins | Where-Object Name -EQ 'al-rules').Id | Should -Be 'al-rules@rf-market'
         }
 
         It 'falls back to text output when list --json is not JSON' {

@@ -38,6 +38,9 @@ BeforeAll {
         $global:BT.Grades = [Collections.Generic.Queue[string]]::new()
         $global:BT.Agents = [Collections.Generic.Queue[string]]::new()
         $global:BT.LeakResult = 'clean'
+        $global:BT.InstallFails = $false
+        $global:BT.Managed = $null
+        Mock Get-ManagedSettingsHash { $global:BT.Managed }
 
         Mock Get-BenchConfig { $global:BT.Config }
         Mock Get-BenchTasks {
@@ -58,7 +61,8 @@ BeforeAll {
             [pscustomobject]@{ Root = $root; Ws = $ws; ClaudeHome = (Join-Path $root 'claude-home'); GraderDir = $grader }
         }
         Mock Install-Profile {
-            [pscustomobject]@{ McpConfigPath = (Join-Path $Workspace.ClaudeHome 'rfbench-mcp.json'); InstalledPlugins = @([pscustomobject]@{ Name = 'p1'; Version = '1.2.3' }) }
+            if ($global:BT.InstallFails) { throw 'marketplace unreachable' }
+            [pscustomobject]@{ McpConfigPath = (Join-Path $Workspace.ClaudeHome 'rfbench-mcp.json'); InstalledPlugins = @([pscustomobject]@{ Id = 'p1@mk'; Name = 'p1'; Version = '1.2.3' }) }
         }
         Mock New-AgentSettings {
             $global:BT.SettingsCalls.Add([pscustomobject]@{ McpMode = $HarnessProfile.McpMode; AllowWeb = $HarnessProfile.AllowWeb; Ws = $Workspace.Ws })
@@ -74,7 +78,7 @@ BeforeAll {
             New-Item -ItemType Directory (Split-Path $TranscriptPath) -Force | Out-Null
             Set-Content -LiteralPath $TranscriptPath '{}'
             [pscustomobject]@{
-                SessionId = "sess-$($global:BT.ClaudeCalls.Count)"; ExitCode = 0
+                SessionId = $(if ($kind -eq 'nosession') { $null } else { "sess-$($global:BT.ClaudeCalls.Count)" }); ExitCode = 0
                 Status = $(if ($kind -eq 'aborted') { 'aborted' } else { 'ok' })
                 AbortReason = $(if ($kind -eq 'aborted') { 'rate-limit' } else { $null })
                 CostUsd = 0.5; Turns = 4; Model = $Model; CliVersion = '2.5.0'; McpServers = @(); ToolUses = @(); TranscriptPath = $TranscriptPath
@@ -116,7 +120,9 @@ Describe 'Invoke-Bench' {
             Auth     = [pscustomobject]@{ Mode = 'subscription'; TokenEnvVar = 'X'; ApiKeyEnvVar = 'Y' }
             Paths    = [pscustomobject]@{ AlParserDll = '' }
         }
-        New-Profile 'strictp' @{ description = 'strict'; mcpMode = 'strict'; mcpServers = @{ mslearn = @{ type = 'http'; url = 'https://x' } } }
+        New-Profile 'strictp' @{ description = 'strict'; mcpMode = 'strict'; mcpServers = @{ mslearn = @{ type = 'http'; url = 'https://x' } }
+            plugins = @(@{ name = 'p1'; marketplace = 'mk'; marketplaceSource = 'rf/mk' })
+        }
         Set-Mocks
     }
 
@@ -224,6 +230,20 @@ Describe 'Invoke-Bench' {
             $t.error | Should -BeLike '*transcript unreadable*'
         }
 
+        It 'ends the task as aborted (no-session) when an ok attempt has no session id' {
+            $global:BT.Agents.Enqueue('nosession')
+            $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null 3>$null
+            $run = Read-Run r1
+            $t1 = Get-TaskEntry $run T001
+            $t1.status | Should -Be 'aborted'
+            $t1.abortReason | Should -Be 'no-session'
+            @($t1.attempts).Count | Should -Be 1
+            $t1.attempts[0].grade | Should -BeNullOrEmpty
+            $global:BT.GradeCalls.Count | Should -Be 1
+            (Get-TaskEntry $run T002).status | Should -Be 'done'
+        }
+
         It 'records an unexpected task error as aborted and continues' {
             $global:BT.Agents.Enqueue('throw')
             $global:BT.Grades.Enqueue('right')
@@ -279,6 +299,21 @@ Describe 'Invoke-Bench' {
             Mock Save-RunRecord { throw 'disk full' }
             { & $script:Bench -Profile strictp -Tasks T001 -RunId r1 -SwitchDocker 6>$null 3>$null } | Should -Throw '*disk full*'
             $global:BT.DockerCalls[-1] | Should -Be 'switch:linux'
+        }
+
+        It 'keeps the original batch error when switching back also fails' {
+            Mock Switch-DockerMode { $global:BT.DockerCalls.Add("switch:$Mode"); if ($Mode -eq 'linux') { throw 'daemon did not restart' } }
+            Mock Save-RunRecord { throw 'disk full' }
+            { & $script:Bench -Profile strictp -Tasks T001 -RunId r1 -SwitchDocker 6>$null 3>$null } | Should -Throw '*disk full*'
+            $global:BT.DockerCalls[-1] | Should -Be 'switch:linux'
+        }
+
+        It 'warns when switching back fails after a successful batch' {
+            Mock Switch-DockerMode { $global:BT.DockerCalls.Add("switch:$Mode"); if ($Mode -eq 'linux') { throw 'daemon did not restart' } }
+            $global:BT.Grades.Enqueue('right')
+            $warnings = & $script:Bench -Profile strictp -Tasks T001 -RunId r2 -SwitchDocker 6>$null 3>&1
+            @($warnings | Where-Object { $_ -is [System.Management.Automation.WarningRecord] -and $_.Message -like '*daemon did not restart*' }).Count | Should -Be 1
+            (Get-TaskEntry (Read-Run r2) T001).status | Should -Be 'done'
         }
     }
 
@@ -380,9 +415,49 @@ Describe 'Invoke-Bench' {
             $run.versions.alParserDll | Should -Be 'C:\fake\Microsoft.Dynamics.Nav.CodeAnalysis.dll'
             $run.versions.pwsh | Should -Be $PSVersionTable.PSVersion.ToString()
             $run.mcp.allowed | Should -Be @('mslearn')
-            $run.mcp.installedPlugins | Should -Be @('p1@1.2.3')
+            # installedPlugins keeps the stable name@marketplace list; versions go to versions.plugins.
+            $run.mcp.installedPlugins | Should -Be @('p1@mk')
+            $run.versions.plugins.'p1@mk' | Should -Be '1.2.3'
+            $run.versions.mcp.mslearn | Should -Be (Get-McpServerHash ([pscustomobject]@{ type = 'http'; url = 'https://x' }))
+            $run.versions.mcp.mslearn | Should -Match '^[0-9a-f]{64}$'
+            $run.versions.PSObject.Properties.Name | Should -Contain 'managedSettings'
+            $run.versions.managedSettings | Should -BeNullOrEmpty
             $run.profile.name | Should -Be 'strictp'
             $run.profile.hash | Should -Match '^[0-9a-f]{64}$'
+        }
+
+        It 'records the managed settings hash when a managed settings file exists' {
+            $global:BT.Grades.Enqueue('right')
+            $global:BT.Managed = 'ab12'
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
+            (Read-Run r1).versions.managedSettings | Should -Be 'ab12'
+        }
+
+        It 'keeps a plugin version null until the plugin is installed' {
+            $global:BT.InstallFails = $true
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null
+            $run = Read-Run r1
+            $run.versions.plugins.PSObject.Properties.Name | Should -Be @('p1@mk')
+            $run.versions.plugins.'p1@mk' | Should -BeNullOrEmpty
+            $run.mcp.installedPlugins | Should -Be @('p1@mk')
+        }
+
+        It 'deletes the run _grader folder even when the batch fails, unless -KeepWorkspace' {
+            $global:BT.SaveCount = 0
+            Mock Save-RunRecord {
+                $global:BT.SaveCount++
+                if ($global:BT.SaveCount -ge 3) { throw 'disk full' }
+                New-Item -ItemType Directory (Split-Path $Path) -Force | Out-Null
+                $Record | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path
+            }
+            { & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null } | Should -Throw '*disk full*'
+            $global:BT.GradeCalls.Count | Should -BeGreaterThan 0
+            Test-Path (Join-Path $script:Temp 'r1\_grader') | Should -BeFalse
+
+            $global:BT.SaveCount = 0
+            $global:BT.GradeCalls.Clear()
+            { & $script:Bench -Profile strictp -Tasks T001 -RunId r2 -KeepWorkspace 6>$null 3>$null } | Should -Throw '*disk full*'
+            Test-Path (Join-Path $script:Temp 'r2\_grader\T001\1') | Should -BeTrue
         }
 
         It 'removes the run temp folder unless -KeepWorkspace' {

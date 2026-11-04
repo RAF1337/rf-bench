@@ -118,3 +118,36 @@ Describe 'Get-ProfileHash' {
         Get-ProfileHash $script:d | Should -Not -Be $h2
     }
 }
+
+Describe 'Get-McpServerHash' {
+    It 'hashes command, args and url as compact JSON, ignoring env and other keys' {
+        $a = [pscustomobject]@{ command = 'npx'; args = @('-y', 'srv'); env = [pscustomobject]@{ TOKEN = 'one' }; type = 'stdio' }
+        $b = [pscustomobject]@{ command = 'npx'; args = @('-y', 'srv'); env = [pscustomobject]@{ TOKEN = 'two' } }
+        $h = Get-McpServerHash $a
+        $h | Should -Match '^[0-9a-f]{64}$'
+        Get-McpServerHash $b | Should -Be $h
+        $json = '{"command":"npx","args":["-y","srv"],"url":null}'
+        $expected = ([BitConverter]::ToString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($json))) -replace '-', '').ToLowerInvariant()
+        $h | Should -Be $expected
+    }
+    It 'changes when args or url change' {
+        $a = Get-McpServerHash ([pscustomobject]@{ command = 'npx'; args = @('-y', 'srv@1') })
+        Get-McpServerHash ([pscustomobject]@{ command = 'npx'; args = @('-y', 'srv@2') }) | Should -Not -Be $a
+        $u1 = Get-McpServerHash ([pscustomobject]@{ type = 'http'; url = 'https://a' })
+        Get-McpServerHash ([pscustomobject]@{ type = 'http'; url = 'https://b' }) | Should -Not -Be $u1
+    }
+}
+
+Describe 'Get-ManagedSettingsHash' {
+    It 'returns the SHA256 of the managed settings file' {
+        $p = Join-Path $TestDrive 'managed-settings.json'
+        Set-Content -LiteralPath $p '{"permissions":{}}' -NoNewline
+        Get-ManagedSettingsHash -Path $p | Should -Be (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    It 'returns null when there is no managed settings file' {
+        Get-ManagedSettingsHash -Path (Join-Path $TestDrive 'none.json') | Should -BeNullOrEmpty
+    }
+    It 'defaults to the Windows managed settings location' {
+        InModuleScope Results { $script:ManagedSettingsPath } | Should -Be (Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json')
+    }
+}

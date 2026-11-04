@@ -2,7 +2,7 @@ Your task is described in TASK.md in the current folder. Read it first.
 
 The AL extension lives in the app/ folder. If app/ does not exist yet (a new extension), create it, using the object names and IDs given in TASK.md.
 
-Compile the app from the current folder with:
+Compile the app from the current folder in PowerShell (the PowerShell tool, or pwsh; the command uses PowerShell syntax and does not work in Bash or cmd) with:
 
 {{COMPILE}}
 

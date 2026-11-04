@@ -401,6 +401,8 @@ Describe 'Get-BasePrompt' {
         $p | Should -Match '(?i)hidden tests'
         $p | Should -Match '(?i)do not create (a )?test app'
         $p | Should -Match '(?i)stop'
+        # The compile command uses PowerShell syntax (& "...\alc.exe").
+        $p | Should -Match '(?i)compile the app from the current folder in PowerShell'
         $p | Should -Not -Match '(?i)rf-bench|grader|solution|mcp'
     }
     It 'throws without a compile command' {

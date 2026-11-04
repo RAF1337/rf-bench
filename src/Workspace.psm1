@@ -228,7 +228,7 @@ function Install-Profile {
         foreach ($pl in $HarnessProfile.Plugins) {
             $id = "$($pl.Name)@$($pl.Marketplace)"
             if (-not $versions.ContainsKey($id)) { throw "plugin $id not installed (not in 'claude plugin list' output)" }
-            $installed += [pscustomobject]@{ Name = $pl.Name; Version = $versions[$id] }
+            $installed += [pscustomobject]@{ Id = $id; Name = $pl.Name; Version = $versions[$id] }
         }
     }
 

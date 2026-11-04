@@ -10,7 +10,8 @@
     over all attempt transcripts. run.json is saved after every attempt.
 
     Task outcome: 'done' (graded to the end), 'aborted' (Claude timeout / rate limit / no
-    result, grader infrastructure failure 'infra', or an unexpected error 'error'; resumable)
+    result, an attempt without a session id 'no-session', grader infrastructure failure
+    'infra', or an unexpected error 'error'; resumable)
     or 'invalid' (transcript leak, or the leak scan failed).
 
 .EXAMPLE
@@ -81,7 +82,15 @@ function Invoke-TaskRun {
     $taskId = $Task.Id
     $ws = New-RunWorkspace -Config $Ctx.Config -Task $Task -RunId $Ctx.RunId -Repeat $Rep
     $installed = Install-Profile -HarnessProfile $Ctx.Profile -Workspace $ws
-    $record.mcp.installedPlugins = @($installed.InstalledPlugins | Where-Object { $_ } | ForEach-Object { "$($_.Name)@$($_.Version)" })
+    # versions.plugins: 'name@marketplace' -> installed version (null until installed).
+    if (-not (Get-EntryValue $record.versions 'plugins')) { Set-EntryValue $record.versions 'plugins' ([pscustomobject][ordered]@{}) }
+    foreach ($pl in @($installed.InstalledPlugins | Where-Object { $_ })) {
+        $id = [string](Get-EntryValue $pl 'Id')
+        if (-not $id) { continue }
+        $known = Get-EntryValue $record.versions.plugins $id
+        if ($known -and $pl.Version -and $known -ne $pl.Version) { Write-Warning "plugin $id version changed during the run: $known -> $($pl.Version)" }
+        Set-EntryValue $record.versions.plugins $id $pl.Version
+    }
     $agentEnv = Get-AgentEnvironment -Config $Ctx.Config -HarnessProfile $Ctx.Profile -Workspace $ws
 
     $timeout = if ($Task.TimeoutMinutes) { $Task.TimeoutMinutes } else { $Ctx.Config.Claude.TimeoutMinutes }
@@ -119,7 +128,14 @@ function Invoke-TaskRun {
                 $status = 'aborted'; $reason = $agent.AbortReason
                 break
             }
-            if ($agent.SessionId) { $sessionId = $agent.SessionId }
+            if (-not $agent.SessionId) {
+                # Without a session id the next attempt cannot --resume the same session.
+                Add-AttemptRecord $record $taskId $Rep $agent $null ''
+                Save-RunRecord $record $Ctx.RunJson
+                $status = 'aborted'; $reason = 'no-session'
+                break
+            }
+            $sessionId = $agent.SessionId
 
             try {
                 $grade = Invoke-Grade -Config $Ctx.Config -Task $Task -AgentAppDir (Join-Path $ws.Ws 'app') -GraderDir $ws.GraderDir -Attempt $n
@@ -282,12 +298,22 @@ try {
         foreach ($w in $plan) { Reset-TaskEntry (Get-TaskEntry $record $w.TaskId $w.Repeat) }
     }
     else {
+        $mcpVersions = [pscustomobject][ordered]@{}
+        foreach ($k in @($harness.McpServers.Keys)) { $mcpVersions | Add-Member -NotePropertyName $k -NotePropertyValue (Get-McpServerHash $harness.McpServers[$k]) }
+        $pluginVersions = [pscustomobject][ordered]@{}
+        foreach ($pl in @($harness.Plugins)) { $pluginVersions | Add-Member -NotePropertyName "$($pl.Name)@$($pl.Marketplace)" -NotePropertyValue $null -Force }
         $versions = [pscustomobject][ordered]@{
             cli         = $null
             bcArtifact  = "$($cfg.Bc.ArtifactType)/$($cfg.Bc.Country)/$($cfg.Bc.Version)"
             compiler    = [pscustomobject][ordered]@{ path = $alc; version = (Get-FileVersion $alc) }
             alParserDll = $alParserDll
             pwsh        = $PSVersionTable.PSVersion.ToString()
+            # serverName -> SHA256 of {command, args, url} (env excluded).
+            mcp             = $mcpVersions
+            # 'name@marketplace' -> version; null until the plugin is installed.
+            plugins         = $pluginVersions
+            # SHA256 of the machine's Claude Code managed settings file, null when there is none.
+            managedSettings = (Get-ManagedSettingsHash)
         }
         $record = New-RunRecord -RunId $RunId -Profile ([pscustomobject]@{ name = $Profile; hash = $profileHash }) -Model $Model `
             -MaxTurns $MaxTurns -AuthMode $cfg.Auth.Mode -McpMode $harness.McpMode -AllowedMcp @($harness.McpServers.Keys) `
@@ -338,5 +364,18 @@ try {
     Write-Host "run.json: $runJson"
 }
 finally {
-    if ($switched) { Switch-DockerMode -Mode linux }
+    # The grader folders hold the agent's builds; they never outlive the run, even when the
+    # batch fails (the rest of the run temp folder is removed above on success).
+    if (-not $KeepWorkspace) {
+        try {
+            $graderRoot = Join-Path (Get-CanonicalPath $cfg.TempRoot) (Join-Path $RunId '_grader')
+            if (Test-Path -LiteralPath $graderRoot) { Remove-Item -LiteralPath $graderRoot -Recurse -Force -ErrorAction Stop }
+        }
+        catch { Write-Warning "could not remove the run grader folder: $($_.Exception.Message)" }
+    }
+    # A failed switch back must not mask the batch result or its original error.
+    if ($switched) {
+        try { Switch-DockerMode -Mode linux }
+        catch { Write-Warning "switching Docker back to Linux failed: $($_.Exception.Message)" }
+    }
 }

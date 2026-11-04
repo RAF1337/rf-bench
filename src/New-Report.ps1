@@ -192,7 +192,13 @@ function Get-RunStats($Run, [int]$Index) {
         McpAvailable    = $available
         McpFound        = @($found)
         McpToolCalls    = $toolCalls
-        Plugins         = @(Get-Prop $mcp 'installedPlugins' | Where-Object { $_ })
+        # versions.plugins ('name@marketplace' -> version) when present; older runs only list
+        # installedPlugins, which carry no comparable version.
+        PluginVersions  = Get-Prop $versions 'plugins'
+        Plugins         = $(if ($null -ne (Get-Prop $versions 'plugins')) {
+                @(Get-Pairs (Get-Prop $versions 'plugins') | ForEach-Object { if ($null -ne $_.Value -and "$($_.Value)" -ne '') { "$($_.Name) $($_.Value)" } else { $_.Name } })
+            }
+            else { @(Get-Prop $mcp 'installedPlugins' | Where-Object { $_ }) })
         CliVersion      = Get-Prop $versions 'cli'
         BcArtifact      = Get-Prop $versions 'bcArtifact'
         Compiler        = $(if ($compiler -is [string]) { $compiler } else { Get-Prop $compiler 'version' })
@@ -210,10 +216,7 @@ function Get-VersionMismatches($Stats) {
     $perRun = foreach ($s in $Stats) {
         $v = [ordered]@{ 'Claude CLI' = $s.CliVersion; 'BC artifact' = $s.BcArtifact; 'AL compiler' = $s.Compiler }
         foreach ($p in @(Get-Pairs $s.McpVersions)) { $v["MCP $($p.Name)"] = $p.Value }
-        foreach ($pl in $s.Plugins) {
-            $i = ([string]$pl).IndexOf('@')
-            if ($i -gt 0) { $v["Plugin $($pl.Substring(0, $i))"] = $pl.Substring($i + 1) }
-        }
+        foreach ($p in @(Get-Pairs $s.PluginVersions)) { $v["Plugin $($p.Name)"] = $p.Value }
         [pscustomobject]@{ Stats = $s; Values = $v }
     }
     $labels = [Collections.Generic.List[string]]::new()
