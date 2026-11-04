@@ -16,9 +16,10 @@ tasks/T001/
     variants/bad/        deliberately wrong solution (required by the validator)
       expected-failures.json
     variants/alt/        alternative correct solution (required by the validator)
+    variants/budget-probe/  optional: functionally correct, standards-naive solution that must miss a budget
 ```
 
-`variants/bad` and `variants/alt` are complete apps (`app.json` plus source) with the same app id
+`variants/bad`, `variants/alt` and `variants/budget-probe` are complete apps (`app.json` plus source) with the same app id
 as `solution/app`.
 
 ## task.json
@@ -56,9 +57,13 @@ compiler folder required) and checks that:
 - `solution/variants/bad` compiles and passes all functional tests, and the checks that fail are
   exactly the ones in `variants/bad/expected-failures.json`. Its budget results are reported but
   not required, because a planted standards violation may legitimately cost SQL;
+- if `solution/variants/budget-probe` exists, it compiles, passes all functional tests and fails
+  at least one `Budget_` test. The probe is a functionally correct but standards-naive solution
+  (for example one that filters in AL instead of SQL); it shows that the budgets can fail. Its
+  check results are not constrained. Tasks with `Budget_` tests should have one;
 - for `bugfix` and `feature` tasks, `assignment/app` is not fully right.
 
-`expected-failures.json` is a non-empty JSON array of check names, each one listed in
+`expected-failures.json` is a non-empty JSON array (not a bare value) of check names, each one listed in
 `checks.json`, for example `["RequiresSetLoadFieldsBeforeRead", "NoFindMinus"]`.
 
 Exit codes: 0 valid, 1 task invalid, 2 validator error (configuration, Docker, compiler or grader

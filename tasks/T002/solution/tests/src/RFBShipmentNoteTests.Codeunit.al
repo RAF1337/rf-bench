@@ -124,8 +124,24 @@ codeunit 70200 "RFB Shipment Note Tests"
         ShipmentNote: Record "RFB Shipment Note";
     begin
         ShipmentNote.DeleteAll();
+        EnsureCustomer(CustomerATok);
+        EnsureCustomer(CustomerBTok);
     end;
 
+    local procedure EnsureCustomer(CustomerNo: Code[20])
+    var
+        Customer: Record Customer;
+    begin
+        if Customer.Get(CustomerNo) then
+            exit;
+        Customer.Init();
+        Customer."No." := CustomerNo;
+        Customer.Name := CustomerNo;
+        Customer.Insert(false);
+    end;
+
+    // Seeds the note without triggers, so the solution's OnInsert (for example one that
+    // defaults Status to Open) cannot change the seeded state.
     local procedure CreateNote(CustomerNo: Code[20]; Status: Enum "RFB Shipment Note Status"; ClosedAt: DateTime): Integer
     var
         ShipmentNote: Record "RFB Shipment Note";
@@ -135,7 +151,7 @@ codeunit 70200 "RFB Shipment Note Tests"
         ShipmentNote.Description := CopyStr(StrSubstNo('Note for %1', CustomerNo), 1, MaxStrLen(ShipmentNote.Description));
         ShipmentNote.Status := Status;
         ShipmentNote."Closed At" := ClosedAt;
-        ShipmentNote.Insert(true);
+        ShipmentNote.Insert(false);
         exit(ShipmentNote."Entry No.");
     end;
 }

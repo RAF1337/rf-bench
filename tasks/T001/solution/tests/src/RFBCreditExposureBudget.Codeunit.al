@@ -6,8 +6,10 @@ codeunit 70101 "RFB Credit Exposure Budget"
     var
         Assert: Codeunit "Library Assert";
         CustomerCount: Integer;
-        // Measured with the reference solution (solution/app) on the seeded data below:
-        // one call reads the active customers once. Budget = reference + 20 %, rounded up.
+        // ESTIMATES pending calibration against the container (plan Task 10, step 6): replace
+        // with the values measured for the reference solution (solution/app) on the seeded data
+        // below. Estimate: one call reads each active customer once. Budget = reference + 20 %,
+        // rounded up.
         ReferenceRows: Integer;
         ReferenceStatements: Integer;
 
@@ -27,6 +29,8 @@ codeunit 70101 "RFB Credit Exposure Budget"
 
         // [WHEN] The total is computed (after one warm-up call for metadata)
         CreditExposure.GetTotalCreditLimit();
+        // Drop the session's data cache, so cached reads cannot zero the counters.
+        SelectLatestVersion();
         RowsBefore := SessionInformation.SqlRowsRead();
         StatementsBefore := SessionInformation.SqlStatementsExecuted();
         Total := CreditExposure.GetTotalCreditLimit();

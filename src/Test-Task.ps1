@@ -12,6 +12,9 @@
         array of check names, each one listed in solution/checks.json). Budget results of the
         bad variant are reported but not required: a planted standards violation may
         legitimately cost SQL;
+      - if solution/variants/budget-probe exists (a functionally correct, standards-naive
+        solution), it compiles, passes the functional tests and fails at least one Budget_
+        test, which shows that the budgets can fail;
       - for bugfix and feature tasks, assignment/app is not fully right (the task is not
         already solved).
 
@@ -40,7 +43,10 @@ Import-Module (Join-Path $PSScriptRoot 'Checks\AlParser.psm1')
 
 $script:Problems = [Collections.Generic.List[string]]::new()
 # One grader folder per graded app.
-$script:GraderFolders = @{ 'solution/app' = 'solution'; 'solution/variants/alt' = 'alt'; 'solution/variants/bad' = 'bad'; 'assignment/app' = 'assignment' }
+$script:GraderFolders = @{
+    'solution/app' = 'solution'; 'solution/variants/alt' = 'alt'; 'solution/variants/bad' = 'bad'
+    'solution/variants/budget-probe' = 'budget-probe'; 'assignment/app' = 'assignment'
+}
 
 function Add-Problem([string]$Variant, [string]$Text) {
     $script:Problems.Add("${Variant}: $Text")
@@ -89,10 +95,13 @@ function Test-FullyRight($Ctx, [string]$Name, [string]$AppDir) {
 function Get-ExpectedFailures($Ctx, [string]$Name) {
     $file = Join-Path $Ctx.Task.BadDir 'expected-failures.json'
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Add-Problem $Name 'expected-failures.json is missing'; return $null }
-    try { $list = @(Get-Content -LiteralPath $file -Raw | ConvertFrom-Json -NoEnumerate | ForEach-Object { $_ }) }
+    try { $json = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json -NoEnumerate }
     catch { Add-Problem $Name "expected-failures.json is not valid JSON ($($_.Exception.Message))"; return $null }
+    # -NoEnumerate keeps a JSON array as one array object, so a bare value can be told apart.
+    $isArray = $json -is [array]
+    $list = @(if ($isArray) { $json | ForEach-Object { $_ } })
     $names = @($list | Where-Object { $_ -is [string] -and $_ })
-    if ($names.Count -eq 0 -or $names.Count -ne $list.Count) {
+    if (-not $isArray -or $names.Count -eq 0 -or $names.Count -ne $list.Count) {
         Add-Problem $Name 'expected-failures.json must be a non-empty JSON array of check names'
         return $null
     }
@@ -130,6 +139,25 @@ function Test-BadVariant($Ctx) {
     if ($missing) { Add-Problem $name "expected checks did not fail: $($missing -join ', ')"; $ok = $false }
     if ($extra) { Add-Problem $name "unexpected checks failed: $($extra -join ', ')"; $ok = $false }
     if ($ok) { Write-Host "  ok   ${name}: fails exactly $($expected -join ', ')" }
+}
+
+# Optional: a functionally correct but standards-naive solution that proves the budgets can
+# fail. It must compile, pass the functional tests and fail at least one Budget_ test.
+function Test-BudgetProbe($Ctx) {
+    $name = 'solution/variants/budget-probe'
+    $dir = Join-Path $Ctx.Task.Root 'solution\variants\budget-probe'
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return }
+    $g = Invoke-VariantGrade $Ctx $name $dir
+    if (-not $g.Compiled) { Add-Problem $name ((Get-GradeReasons $g) -join "`n    "); return }
+    $ok = $true
+    foreach ($t in @($g.Tests | Where-Object { -not $_.Passed -and -not $_.IsBudget })) {
+        Add-Problem $name "test $($t.Codeunit).$($t.Name) failed (the budget probe must be functionally right): $($t.Message)"
+        $ok = $false
+    }
+    if (-not $g.TestsPassed -and $ok) { Add-Problem $name 'functional tests did not pass'; $ok = $false }
+    $budgetFails = @($g.Tests | Where-Object { -not $_.Passed -and $_.IsBudget })
+    if ($budgetFails.Count -eq 0) { Add-Problem $name 'no Budget_ test failed; the budgets do not catch this naive solution'; return }
+    if ($ok) { Write-Host "  ok   ${name}: fails budget(s) $(@($budgetFails | ForEach-Object { "$($_.Codeunit).$($_.Name)" }) -join ', ')" }
 }
 
 # The starter app of a bugfix or feature task must not already be fully right.
@@ -176,6 +204,7 @@ try {
     Test-FullyRight $ctx 'solution/app' $benchTask.SolutionAppDir
     Test-FullyRight $ctx 'solution/variants/alt' $benchTask.AltDir
     Test-BadVariant $ctx
+    Test-BudgetProbe $ctx
     if ($benchTask.Type -in 'bugfix', 'feature') { Test-StarterApp $ctx }
 
     if ($script:Problems.Count -eq 0) {

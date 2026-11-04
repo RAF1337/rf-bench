@@ -60,6 +60,7 @@ Describe 'Test-Task' {
             alt        = New-Grade right
             bad        = New-Grade bad -Fail NoFindMinus
             assignment = New-Grade wrong -Fail NoFindMinus
+            probe      = New-Grade bad -Fail NoFindMinus -BudgetsPassed $false
         }
         $global:TT.Calls = [Collections.Generic.List[object]]::new()
         $global:TT.Docker = [Collections.Generic.List[string]]::new()
@@ -76,6 +77,7 @@ Describe 'Test-Task' {
                 (Join-Path $root 'solution\variants\alt') { 'alt' }
                 (Join-Path $root 'solution\variants\bad') { 'bad' }
                 (Join-Path $root 'assignment\app') { 'assignment' }
+                (Join-Path $root 'solution\variants\budget-probe') { 'probe' }
                 default { throw "unexpected app dir $AgentAppDir" }
             }
             $global:TT.Calls.Add([pscustomobject]@{ Variant = $variant; GraderDir = $GraderDir; Attempt = $Attempt })
@@ -211,6 +213,57 @@ Describe 'Test-Task' {
             $r = Invoke-Validator
             $r.Exit | Should -Be 1
             $r.Output | Should -Match 'LogicNotOnPage'
+        }
+
+        It 'fails when expected-failures.json is a bare string instead of an array' {
+            Set-Content -LiteralPath (Join-Path $script:TaskDir 'solution\variants\bad\expected-failures.json') -Value '"NoFindMinus"'
+            $r = Invoke-Validator
+            $r.Exit | Should -Be 1
+            $r.Output | Should -Match 'expected-failures\.json must be'
+            $global:TT.Calls.Variant | Should -Not -Contain 'bad'
+        }
+    }
+
+    Context 'budget probe' {
+        BeforeEach {
+            $script:ProbeDir = Join-Path $script:TaskDir 'solution\variants\budget-probe'
+            New-Item -ItemType Directory $script:ProbeDir -Force | Out-Null
+        }
+
+        It 'is not graded when the folder does not exist' {
+            Remove-Item -LiteralPath $script:ProbeDir -Recurse -Force
+            (Invoke-Validator).Exit | Should -Be 0
+            $global:TT.Calls.Variant | Should -Not -Contain 'probe'
+        }
+
+        It 'passes when the probe fails a budget, into its own grader folder' {
+            $r = Invoke-Validator
+            $r.Exit | Should -Be 0
+            $r.Output | Should -Match 'budget-probe'
+            $c = $global:TT.Calls | Where-Object Variant -EQ 'probe'
+            $c.GraderDir | Should -Be (Join-Path $script:Temp 'validate\TX01\budget-probe')
+        }
+
+        It 'fails when the probe passes every budget' {
+            $global:TT.Grades.probe = New-Grade bad -Fail NoFindMinus
+            $r = Invoke-Validator
+            $r.Exit | Should -Be 1
+            $r.Output | Should -Match 'variants/budget-probe'
+            $r.Output | Should -Match 'no Budget_ test failed'
+        }
+
+        It 'fails when the probe fails a functional test' {
+            $global:TT.Grades.probe = New-Grade bad -TestsPassed $false -BudgetsPassed $false
+            $r = Invoke-Validator
+            $r.Exit | Should -Be 1
+            $r.Output | Should -Match 'C\.Func'
+        }
+
+        It 'fails when the probe does not compile' {
+            $global:TT.Grades.probe = New-Grade bad -Compiled $false -BudgetsPassed $false
+            $r = Invoke-Validator
+            $r.Exit | Should -Be 1
+            $r.Output | Should -Match 'AL0001'
         }
     }
 
