@@ -57,6 +57,14 @@ Describe 'Run record' {
         @($m.available).Count | Should -Be 2
         @($m.foundByClaude) | Should -Be @('claude.ai Gmail')
     }
+    It 'records an ungraded (aborted) attempt with a null grade' {
+        $r = New-Rec
+        Add-AttemptRecord $r 'T001' 1 (New-Agent) $null ''
+        $t = $r.tasks[0]
+        $t.attempts.Count | Should -Be 1
+        $t.attempts[0].grade | Should -BeNullOrEmpty
+        $t.fullyRightAttempt | Should -BeNullOrEmpty
+    }
     It 'throws for an unknown task entry' {
         { Add-AttemptRecord (New-Rec) 'T999' 1 (New-Agent) (New-Grade $true $true) '' } | Should -Throw '*T999*'
     }

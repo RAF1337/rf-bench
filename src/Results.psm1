@@ -64,7 +64,7 @@ function Add-AttemptRecord {
         [Parameter(Mandatory, Position = 1)][string]$TaskId,
         [Parameter(Mandatory, Position = 2)][int]$Repeat,
         [Parameter(Mandatory, Position = 3)]$Agent,
-        [Parameter(Mandatory, Position = 4)]$Grade,
+        [Parameter(Mandatory, Position = 4)][AllowNull()]$Grade,
         [Parameter(Position = 5)][string]$Feedback = ''
     )
     $t = Find-TaskEntry $Record $TaskId $Repeat
