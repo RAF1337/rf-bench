@@ -119,6 +119,36 @@ Describe 'Get-ProfileHash' {
     }
 }
 
+Describe 'Get-FolderHash' {
+    BeforeEach {
+        $script:d = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force "$script:d\a\b" | Out-Null
+        Set-Content "$script:d\a\b\f.txt" 'abc' -NoNewline
+        Set-Content "$script:d\g.txt" 'g' -NoNewline
+    }
+    It 'matches Get-ProfileHash for the same folder' {
+        Get-FolderHash $script:d | Should -Be (Get-ProfileHash $script:d)
+    }
+    It 'changes when one byte of a nested file changes' {
+        $h = Get-FolderHash $script:d
+        Set-Content "$script:d\a\b\f.txt" 'abd' -NoNewline
+        Get-FolderHash $script:d | Should -Not -Be $h
+    }
+    It 'changes when a file is renamed' {
+        $h = Get-FolderHash $script:d
+        Rename-Item "$script:d\g.txt" 'h.txt'
+        Get-FolderHash $script:d | Should -Not -Be $h
+    }
+    It 'does not depend on file creation order' {
+        $e = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force "$e\a\b" | Out-Null
+        Set-Content "$e\g.txt" 'g' -NoNewline
+        Start-Sleep -Milliseconds 20
+        Set-Content "$e\a\b\f.txt" 'abc' -NoNewline
+        Get-FolderHash $e | Should -Be (Get-FolderHash $script:d)
+    }
+}
+
 Describe 'Get-McpServerHash' {
     It 'hashes command, args and url as compact JSON, ignoring env and other keys' {
         $a = [pscustomobject]@{ command = 'npx'; args = @('-y', 'srv'); env = [pscustomobject]@{ TOKEN = 'one' }; type = 'stdio' }

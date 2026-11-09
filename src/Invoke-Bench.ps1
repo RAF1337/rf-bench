@@ -277,6 +277,14 @@ else {
 }
 $tasksById = @{}
 foreach ($t in $taskList) { $tasksById[$t.Id] = $t }
+if ($existing) {
+    # Only pending tasks are checked: a finished task keeps the hash it was graded with.
+    $recorded = Get-EntryValue $existing.versions 'tasks'
+    foreach ($t in $taskList) {
+        $old = if ($recorded) { Get-EntryValue $recorded $t.Id }
+        if ($old -and $old -ne $t.Hash) { throw "task '$($t.Id)' changed since run $RunId started" }
+    }
+}
 
 # --- preflight (before any agent call) -----------------------------------------------------------
 
@@ -296,12 +304,23 @@ try {
     if ($existing) {
         $record = $existing
         foreach ($w in $plan) { Reset-TaskEntry (Get-TaskEntry $record $w.TaskId $w.Repeat) }
+        # Runs started before task fingerprints existed get them now.
+        if (-not (Get-EntryValue $record.versions 'tasks')) {
+            $record.versions | Add-Member -NotePropertyName tasks -NotePropertyValue ([pscustomobject][ordered]@{}) -Force
+        }
+        foreach ($t in $taskList) {
+            if ($null -eq (Get-EntryValue $record.versions.tasks $t.Id)) {
+                $record.versions.tasks | Add-Member -NotePropertyName $t.Id -NotePropertyValue $t.Hash -Force
+            }
+        }
     }
     else {
         $mcpVersions = [pscustomobject][ordered]@{}
         foreach ($k in @($harness.McpServers.Keys)) { $mcpVersions | Add-Member -NotePropertyName $k -NotePropertyValue (Get-McpServerHash $harness.McpServers[$k]) }
         $pluginVersions = [pscustomobject][ordered]@{}
         foreach ($pl in @($harness.Plugins)) { $pluginVersions | Add-Member -NotePropertyName "$($pl.Name)@$($pl.Marketplace)" -NotePropertyValue $null -Force }
+        $taskVersions = [pscustomobject][ordered]@{}
+        foreach ($t in $taskList) { $taskVersions | Add-Member -NotePropertyName $t.Id -NotePropertyValue $t.Hash }
         $versions = [pscustomobject][ordered]@{
             cli         = $null
             bcArtifact  = "$($cfg.Bc.ArtifactType)/$($cfg.Bc.Country)/$($cfg.Bc.Version)"
@@ -314,6 +333,8 @@ try {
             plugins         = $pluginVersions
             # SHA256 of the machine's Claude Code managed settings file, null when there is none.
             managedSettings = (Get-ManagedSettingsHash)
+            # taskId -> SHA256 of the whole task folder.
+            tasks           = $taskVersions
         }
         $record = New-RunRecord -RunId $RunId -Profile ([pscustomobject]@{ name = $Profile; hash = $profileHash }) -Model $Model `
             -MaxTurns $MaxTurns -AuthMode $cfg.Auth.Mode -McpMode $harness.McpMode -AllowedMcp @($harness.McpServers.Keys) `

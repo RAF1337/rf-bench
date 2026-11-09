@@ -128,11 +128,11 @@ function Get-PendingWork {
     }
 }
 
-# SHA256 over sorted relative paths and file bytes (profile.json included).
-function Get-ProfileHash {
+# SHA256 over sorted relative paths and file bytes of a whole folder.
+function Get-FolderHash {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$ProfileDir)
-    $root = (Resolve-Path -LiteralPath $ProfileDir).Path.TrimEnd('\', '/')
+    param([Parameter(Mandatory)][string]$Path)
+    $root = (Resolve-Path -LiteralPath $Path).Path.TrimEnd('\', '/')
     $files = Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object {
         [pscustomobject]@{ Rel = $_.FullName.Substring($root.Length + 1).Replace('\', '/'); Full = $_.FullName }
     } | Sort-Object { $_.Rel } -Culture '' -CaseSensitive
@@ -147,6 +147,13 @@ function Get-ProfileHash {
         ([BitConverter]::ToString($h.GetHashAndReset()) -replace '-', '').ToLowerInvariant()
     }
     finally { $h.Dispose() }
+}
+
+# Profile fingerprint (profile.json included).
+function Get-ProfileHash {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ProfileDir)
+    Get-FolderHash -Path $ProfileDir
 }
 
 function ConvertTo-Sha256Hex([byte[]]$Bytes) {
@@ -178,5 +185,5 @@ function Get-ManagedSettingsHash {
     ConvertTo-Sha256Hex ([IO.File]::ReadAllBytes($Path))
 }
 
-Export-ModuleMember -Function New-RunRecord, Add-AttemptRecord, Set-TaskOutcome, Save-RunRecord, Get-RunRecord, Get-PendingWork, Get-ProfileHash,
+Export-ModuleMember -Function New-RunRecord, Add-AttemptRecord, Set-TaskOutcome, Save-RunRecord, Get-RunRecord, Get-PendingWork, Get-FolderHash, Get-ProfileHash,
     Get-McpServerHash, Get-ManagedSettingsHash

@@ -2,6 +2,7 @@
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'Checks/Checks.psm1')
+Import-Module (Join-Path $PSScriptRoot 'Results.psm1')
 
 $script:Categories = @('data-access', 'locking-isolation', 'transactions', 'architecture', 'naming-style', 'ui', 'error-handling')
 $script:Types = @('bugfix', 'feature', 'greenfield')
@@ -43,6 +44,12 @@ function Get-BenchTask {
     if ($null -ne $timeout -and ($timeout -isnot [int] -and $timeout -isnot [long] -or $timeout -le 0)) {
         throw "${id}: timeoutMinutes must be a positive integer"
     }
+
+    $family = Get-Prop $j 'family'
+    if ($null -ne $family -and $family -isnot [string]) { throw "${id}: family must be a string" }
+    $split = Get-Prop $j 'split'
+    if ($null -eq $split) { $split = 'dev' }
+    if ($split -isnot [string] -or $split -cnotin 'dev', 'holdout') { throw "${id}: invalid split '$split'" }
 
     $assign = Join-Path $root 'assignment'
     $solApp = Join-Path $root 'solution\app'
@@ -93,6 +100,9 @@ function Get-BenchTask {
         Difficulty     = [string]$j.difficulty
         Area           = [string]$j.area
         Categories     = [string[]]$cats
+        Family         = $family
+        Split          = $split
+        Hash           = Get-FolderHash -Path $root
         Root           = $root
         AssignmentDir  = $assign
         SolutionAppDir = $solApp

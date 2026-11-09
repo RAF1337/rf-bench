@@ -33,6 +33,10 @@ as `solution/app`.
 | `area` | Free text functional area. |
 | `categories` | Subset of: `data-access`, `locking-isolation`, `transactions`, `architecture`, `naming-style`, `ui`, `error-handling`. |
 | `timeoutMinutes` | Optional per-task timeout. |
+| `family` | Optional string naming the task family (for example `n-plus-one`); `null` when absent. |
+| `split` | Optional, `dev` (default) or `holdout`. |
+
+Each task has a hash: SHA256 over the relative paths and bytes of every file in the task folder. It is recorded in `run.json` as `versions.tasks`, and `-Resume` refuses to continue when a pending task changed since the run started.
 
 ## checks.json
 

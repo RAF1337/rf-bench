@@ -40,12 +40,13 @@ BeforeAll {
         $global:BT.LeakResult = 'clean'
         $global:BT.InstallFails = $false
         $global:BT.Managed = $null
+        $global:BT.HashSuffix = ''
         Mock Get-ManagedSettingsHash { $global:BT.Managed }
 
         Mock Get-BenchConfig { $global:BT.Config }
         Mock Get-BenchTasks {
             $ids = if ($Ids) { $Ids } else { 'T001', 'T002' }
-            foreach ($i in $ids) { [pscustomobject]@{ Id = $i; TimeoutMinutes = $null; TestsDir = 'x' } }
+            foreach ($i in $ids) { [pscustomobject]@{ Id = $i; TimeoutMinutes = $null; TestsDir = 'x'; Hash = "hash-$i$($global:BT.HashSuffix)" } }
         }
         Mock Import-AlParser { 'C:\fake\Microsoft.Dynamics.Nav.CodeAnalysis.dll' }
         Mock Get-AlcPath { 'C:\fake\alc.exe' }
@@ -177,7 +178,7 @@ Describe 'Invoke-Bench' {
         }
 
         It 'uses the task timeout when set, else the config timeout' {
-            Mock Get-BenchTasks { [pscustomobject]@{ Id = 'T001'; TimeoutMinutes = 7; TestsDir = 'x' }; [pscustomobject]@{ Id = 'T002'; TimeoutMinutes = $null; TestsDir = 'x' } }
+            Mock Get-BenchTasks { [pscustomobject]@{ Id = 'T001'; TimeoutMinutes = 7; TestsDir = 'x'; Hash = 'h1' }; [pscustomobject]@{ Id = 'T002'; TimeoutMinutes = $null; TestsDir = 'x'; Hash = 'h1' } }
             $global:BT.Grades.Enqueue('right'); $global:BT.Grades.Enqueue('right')
             & $script:Bench -Profile strictp -RunId r1 6>$null
             $global:BT.ClaudeCalls.TimeoutMinutes | Should -Be @(7, 30)
@@ -350,6 +351,28 @@ Describe 'Invoke-Bench' {
             $global:BT.ClaudeCalls[0].McpMode | Should -Be 'open'
         }
 
+        It 'refuses a pending task whose hash changed since the run started' {
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
+            Set-Mocks
+            $global:BT.HashSuffix = '-edited'
+            { & $script:Bench -Resume r1 6>$null } | Should -Throw "task 'T001' changed since run r1 started"
+            $global:BT.ClaudeCalls.Count | Should -Be 0
+        }
+
+        It 'adds versions.tasks to a run record that has none' {
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
+            $path = Join-Path $script:Repo 'results\r1\run.json'
+            $j = Get-Content $path -Raw | ConvertFrom-Json -AsHashtable
+            $j.versions.Remove('tasks')
+            $j | ConvertTo-Json -Depth 20 | Set-Content $path
+            Set-Mocks
+            $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Resume r1 6>$null
+            (Read-Run r1).versions.tasks.T001 | Should -Be 'hash-T001'
+        }
+
         It 'refuses a different setting or a changed profile on resume' {
             $global:BT.Agents.Enqueue('aborted')
             & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
@@ -403,6 +426,11 @@ Describe 'Invoke-Bench' {
             $global:BT.ClaudeCalls[0].Model | Should -Be 'm-x'
             $global:BT.ClaudeCalls[0].MaxTurns | Should -Be 9
             $global:BT.SettingsCalls[0].AllowWeb | Should -BeTrue
+        }
+
+        It 'records the task hashes in versions.tasks' {
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
+            (Read-Run r1).versions.tasks.T001 | Should -Be 'hash-T001'
         }
 
         It 'records versions, plugins and the MCP allowed list' {
