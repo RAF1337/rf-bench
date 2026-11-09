@@ -63,6 +63,31 @@ function ConvertTo-AgentPath([string[]]$Lines, [object[]]$Map) {
     }
 }
 
+# Names the hidden test framework uses; an agent object with one of these would shadow it.
+$script:ReservedNameRx = [regex]::new('^(Assert|Any|Library( - |\s).*|Test Runner.*)$', 'IgnoreCase')
+$script:ObjectDeclRx = [regex]::new('(?im)^\s*(table|tableextension|page|pageextension|pagecustomization|codeunit|report|reportextension|query|xmlport|enum|enumextension|interface|permissionset|permissionsetextension|profile|controladdin|entitlement)\s+(\d+\s+)?("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)')
+
+# One message per agent object whose name is reserved by the test framework. Paths are relative
+# to the app folder and prefixed 'app\', so the message never shows an absolute grader path.
+function Get-ReservedObjectViolations([string]$AppDir) {
+    $root = [IO.Path]::GetFullPath($AppDir).TrimEnd('\', '/')
+    $files = Get-ChildItem -LiteralPath $AppDir -Recurse -File -Filter '*.al' -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName.Substring($root.Length) -notmatch '(?i)[\\/]\.alpackages[\\/]' }
+    foreach ($f in $files) {
+        $text = Get-Content -LiteralPath $f.FullName -Raw
+        if (-not $text) { continue }
+        $text = [regex]::Replace($text, '(?s)/\*.*?\*/', '')
+        $text = [regex]::Replace($text, '//[^\r\n]*', '')
+        $rel = 'app\' + $f.FullName.Substring($root.Length).TrimStart('\', '/').Replace('/', '\')
+        foreach ($m in $script:ObjectDeclRx.Matches($text)) {
+            $name = $m.Groups[3].Value.Trim('"')
+            if ($script:ReservedNameRx.IsMatch($name)) {
+                "${rel}: object name '$name' is reserved by the test framework. Rename the object."
+            }
+        }
+    }
+}
+
 function Remove-AppQuietly($Config, [guid]$AppId) {
     try { $null = Remove-BenchApp $Config -AppId $AppId }
     catch { Write-Warning "Grader cleanup: removing app $AppId failed: $($_.Exception.Message)" }
@@ -132,6 +157,7 @@ function Invoke-GradeCore($Config, $Task, [string]$AgentAppDir, [string]$GraderD
         Findings         = [object[]]@()
         ChecksPassed     = $false
         FullyRight       = $false
+        Guard            = $null
     }
 
     # Specific mappings first, then the attempt and grader folders as catch-alls.
@@ -141,6 +167,13 @@ function Invoke-GradeCore($Config, $Task, [string]$AgentAppDir, [string]$GraderD
         , @($attemptDir, $script:GraderToken)
         , @($GraderDir, $script:GraderToken)
     )
+
+    $violations = [string[]]@(Get-ReservedObjectViolations $appDir)
+    if ($violations.Count) {
+        $grade.CompileErrors = $violations
+        $grade.Guard = 'reserved-name'
+        return $grade
+    }
 
     $build = Invoke-SafeCompile $Config $appDir (Join-Path $outDir "$($Task.Id).app") -EnableAnalyzers
     foreach ($g in @($build.Warnings | Group-Object Rule | Sort-Object Name)) { $grade.AnalyzerWarnings[$g.Name] = $g.Count }
