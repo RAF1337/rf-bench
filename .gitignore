@@ -1,5 +1,6 @@
-results/
+/results/
 *.app
 .alpackages/
 .output/
 .superpowers/
+config/bench.local.json

@@ -1,0 +1,43 @@
+{
+  "id": "516b2dfa-7071-4ae3-8035-45c9afe3aa1c",
+  "name": "RFB Credit Exposure Tests",
+  "publisher": "rf-bench",
+  "version": "1.0.0.0",
+  "brief": "",
+  "description": "Hidden tests for task T001.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "f84457d6-7fa3-45f9-afc5-e254bc4c6762",
+      "name": "RFB Credit Exposure",
+      "publisher": "rf-bench",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+      "name": "Library Assert",
+      "publisher": "Microsoft",
+      "version": "29.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "platform": "29.0.0.0",
+  "application": "29.0.0.0",
+  "idRanges": [
+    {
+      "from": 70100,
+      "to": 70199
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "16.0",
+  "target": "Cloud"
+}

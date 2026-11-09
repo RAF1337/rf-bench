@@ -1,0 +1,9 @@
+{
+  "id": "T002",
+  "title": "Shipment notes per customer",
+  "type": "greenfield",
+  "difficulty": "medium",
+  "area": "Sales / shipping",
+  "categories": ["locking-isolation", "transactions", "architecture"],
+  "timeoutMinutes": 30
+}

@@ -1,0 +1,43 @@
+{
+  "id": "05c11e62-f536-4abf-ac21-eb31dda1cd09",
+  "name": "RFB Shipment Notes Tests",
+  "publisher": "rf-bench",
+  "version": "1.0.0.0",
+  "brief": "",
+  "description": "Hidden tests for task T002.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "e046d9bf-95f7-413b-9680-5adc8fd96cc0",
+      "name": "RFB Shipment Notes",
+      "publisher": "rf-bench",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+      "name": "Library Assert",
+      "publisher": "Microsoft",
+      "version": "29.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "platform": "29.0.0.0",
+  "application": "29.0.0.0",
+  "idRanges": [
+    {
+      "from": 70200,
+      "to": 70299
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "16.0",
+  "target": "Cloud"
+}

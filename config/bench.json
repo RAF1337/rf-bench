@@ -1,0 +1,28 @@
+{
+  "TempRoot": "C:\\rfb-runs",
+  "Bc": {
+    "ArtifactType": "Sandbox",
+    "Country": "w1",
+    "Version": "29.0.54011.57417",
+    "ContainerName": "rfbench",
+    "CompilerFolder": "",
+    "Credential": {
+      "User": "admin",
+      "PasswordEnvVar": "RFBENCH_BC_PASSWORD"
+    }
+  },
+  "Claude": {
+    "DefaultModel": "claude-opus-5-5",
+    "MaxTurns": 60,
+    "TimeoutMinutes": 30,
+    "MaxAttempts": 3
+  },
+  "Auth": {
+    "Mode": "subscription",
+    "TokenEnvVar": "RFBENCH_CLAUDE_OAUTH_TOKEN",
+    "ApiKeyEnvVar": "RFBENCH_ANTHROPIC_API_KEY"
+  },
+  "Paths": {
+    "AlParserDll": ""
+  }
+}

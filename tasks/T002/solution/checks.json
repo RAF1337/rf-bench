@@ -1,0 +1,17 @@
+[
+  {
+    "check": "ReadIsolationOnCount",
+    "category": "locking-isolation",
+    "params": { "tables": ["RFB Shipment Note"] }
+  },
+  {
+    "check": "NoCommitIn",
+    "category": "transactions",
+    "params": {}
+  },
+  {
+    "check": "LogicNotOnPage",
+    "category": "architecture",
+    "params": {}
+  }
+]
