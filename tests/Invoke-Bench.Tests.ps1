@@ -4,7 +4,7 @@
 # Results.psm1, Get-BenchProfile and Get-ProfileHash run for real against TestDrive.
 BeforeAll {
     $src = Join-Path $PSScriptRoot '..\src'
-    foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results') {
+    foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results', 'Gold') {
         Import-Module (Join-Path $src "$m.psm1") -Force
     }
     Import-Module (Join-Path $src 'Checks\AlParser.psm1') -Force
@@ -41,6 +41,16 @@ BeforeAll {
         $global:BT.InstallFails = $false
         $global:BT.Managed = $null
         $global:BT.HashSuffix = ''
+        $global:BT.GoldCalls = [Collections.Generic.List[object]]::new()
+        $global:BT.GoldFails = @()
+        $global:BT.GoldThrows = $false
+        $global:BT.Order = [Collections.Generic.List[string]]::new()
+        Mock Get-GoldResult {
+            $global:BT.Order.Add("gold:$($Task.Id)")
+            $global:BT.GoldCalls.Add([pscustomobject]@{ TaskId = $Task.Id; CacheDir = $CacheDir; BcArtifact = $BcArtifact; CompilerVersion = $CompilerVersion; GraderDir = $GraderDir })
+            if ($global:BT.GoldThrows) { throw 'infra: gold grading failed' }
+            [pscustomobject]@{ FullyRight = ($Task.Id -notin $global:BT.GoldFails); Cached = $false }
+        }
         Mock Get-ManagedSettingsHash { $global:BT.Managed }
 
         Mock Get-BenchConfig { $global:BT.Config }
@@ -70,6 +80,7 @@ BeforeAll {
             Join-Path $Workspace.Ws '.claude\settings.json'
         }
         Mock Invoke-ClaudeAttempt {
+            $global:BT.Order.Add('claude')
             $global:BT.ClaudeCalls.Add([pscustomobject]@{
                     Ws = $Ws; Prompt = $Prompt; Model = $Model; MaxTurns = $MaxTurns; TimeoutMinutes = $TimeoutMinutes
                     McpConfigPath = $McpConfigPath; McpMode = $McpMode; ResumeSessionId = $ResumeSessionId; TranscriptPath = $TranscriptPath
@@ -339,6 +350,58 @@ Describe 'Invoke-Bench' {
             $warnings = & $script:Bench -Profile strictp -Tasks T001 -RunId r2 -SwitchDocker 6>$null 3>&1
             @($warnings | Where-Object { $_ -is [System.Management.Automation.WarningRecord] -and $_.Message -like '*daemon did not restart*' }).Count | Should -Be 1
             (Get-TaskEntry (Read-Run r2) T001).status | Should -Be 'done'
+        }
+    }
+
+    Context 'gold preflight' {
+        It 'grades every planned task before the first agent call' {
+            & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null
+            @($global:BT.Order)[0..2] | Should -Be @('gold:T001', 'gold:T002', 'claude')
+            $global:BT.GoldCalls[0].CacheDir | Should -Be (Join-Path $script:Repo 'results\_gold')
+            $global:BT.GoldCalls[0].BcArtifact | Should -Be 'Sandbox/w1/29.0.1.2'
+            $global:BT.GoldCalls[0].GraderDir | Should -Be (Join-Path $script:Temp 'r1\_grader\_gold\T001')
+            $global:BT.GoldCalls[0].CompilerVersion | Should -Be ([string](Read-Run r1).versions.compiler.version)
+        }
+        It 'skips every run of a gold-failed task and still runs the others' {
+            $global:BT.GoldFails = @('T001')
+            $global:BT.Grades.Enqueue('right')
+            $warnings = & $script:Bench -Profile strictp -Tasks T001, T002 -Repeat 2 -RunId r1 6>$null 3>&1
+            @($warnings | Where-Object { $_ -is [System.Management.Automation.WarningRecord] -and $_.Message -like '*T001*' }).Count | Should -BeGreaterThan 0
+            $run = Read-Run r1
+            foreach ($rep in 1, 2) {
+                $t = Get-TaskEntry $run T001 $rep
+                $t.status | Should -Be 'skipped'
+                $t.abortReason | Should -Be 'gold-failed'
+                @($t.attempts).Count | Should -Be 0
+            }
+            (Get-TaskEntry $run T002 1).status | Should -Be 'done'
+            @($global:BT.ClaudeCalls | Where-Object { $_.Ws -like '*\T001\*' }).Count | Should -Be 0
+            $global:BT.ClaudeCalls.Count | Should -BeGreaterThan 0
+        }
+        It 'never calls Get-GoldResult with -SkipPreflight' {
+            $global:BT.GoldFails = @('T001')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 -SkipPreflight 6>$null
+            Should -Invoke Get-GoldResult -Times 0 -Exactly
+            (Get-TaskEntry (Read-Run r1) T001).status | Should -Be 'done'
+        }
+        It 'stops before any agent call when gold grading throws, and marks nothing skipped' {
+            $global:BT.GoldThrows = $true
+            { & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null } | Should -Throw '*gold grading failed*'
+            $global:BT.ClaudeCalls.Count | Should -Be 0
+            @((Read-Run r1).tasks | Where-Object { $_.status -eq 'skipped' }).Count | Should -Be 0
+        }
+        It 'keeps skipped tasks skipped on -Resume' {
+            $global:BT.GoldFails = @('T001')
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null 3>$null
+            Set-Mocks
+            $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Resume r1 6>$null
+            $run = Read-Run r1
+            (Get-TaskEntry $run T001).status | Should -Be 'skipped'
+            (Get-TaskEntry $run T001).abortReason | Should -Be 'gold-failed'
+            (Get-TaskEntry $run T002).status | Should -Be 'done'
+            $global:BT.GoldCalls.TaskId | Should -Be @('T002')
         }
     }
 

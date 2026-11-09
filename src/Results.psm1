@@ -1,7 +1,7 @@
 #Requires -Version 7.6
 Set-StrictMode -Version Latest
 
-$script:Statuses = @('pending', 'done', 'aborted', 'invalid')
+$script:Statuses = @('pending', 'done', 'aborted', 'invalid', 'skipped')
 
 function Get-MemberValue($Obj, [string]$Name) {
     if ($null -eq $Obj) { return $null }
@@ -90,7 +90,7 @@ function Set-TaskOutcome {
         [Parameter(Mandatory, Position = 0)]$Record,
         [Parameter(Mandatory, Position = 1)][string]$TaskId,
         [Parameter(Mandatory, Position = 2)][int]$Repeat,
-        [Parameter(Mandatory)][ValidateSet('pending', 'done', 'aborted', 'invalid')][string]$Status,
+        [Parameter(Mandatory)][ValidateSet('pending', 'done', 'aborted', 'invalid', 'skipped')][string]$Status,
         $Leak,
         [string]$AbortReason
     )
@@ -124,7 +124,7 @@ function Get-PendingWork {
     param([Parameter(Mandatory)][string]$RunJson)
     $rec = Get-RunRecord $RunJson
     foreach ($t in @($rec.tasks)) {
-        if ($t.status -notin 'done', 'invalid') { [pscustomobject]@{ TaskId = $t.taskId; Repeat = [int]$t.repeat } }
+        if ($t.status -notin 'done', 'invalid', 'skipped') { [pscustomobject]@{ TaskId = $t.taskId; Repeat = [int]$t.repeat } }
     }
 }
 

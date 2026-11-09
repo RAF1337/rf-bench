@@ -85,6 +85,15 @@ Describe 'Get-PendingWork' {
         @(Get-PendingWork $p).Count | Should -Be 1
         (Get-RunRecord $p).tasks[2].leak.leaked | Should -BeTrue
     }
+    It 'accepts skipped and treats it as not pending' {
+        $r = New-Rec
+        Set-TaskOutcome $r 'T001' 1 -Status 'skipped' -AbortReason 'gold-failed'
+        $r.tasks[0].status | Should -Be 'skipped'
+        $r.tasks[0].abortReason | Should -Be 'gold-failed'
+        $p = Join-Path $TestDrive 'run-skipped.json'
+        Save-RunRecord $r $p
+        ($(Get-PendingWork $p) | ForEach-Object { "$($_.TaskId)/$($_.Repeat)" }) | Should -Be @('T001/2', 'T002/1')
+    }
     It 'rejects an invalid status' {
         { Set-TaskOutcome (New-Rec) 'T001' 1 -Status 'weird' } | Should -Throw
     }

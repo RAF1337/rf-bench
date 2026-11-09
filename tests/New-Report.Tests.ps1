@@ -158,6 +158,12 @@ Describe 'New-Report' {
         Get-Cell $script:Html 1 'task:T004/1' | Should -Be 'not run'
     }
 
+    It 'renders a run whose task runs were skipped by the gold preflight' {
+        $skipped = Copy-Fixture $script:A { param($j) $j.tasks[0].status = 'skipped'; $j.tasks[0].abortReason = 'gold-failed' }
+        $html = Invoke-Report @($skipped)
+        Get-Cell $html 0 'task:T001/1' | Should -Match 'skipped'
+    }
+
     It 'HTML-escapes values taken from run.json' {
         $script:Html | Should -Not -Match '<script>alert'
         $script:Html | Should -Match '&lt;script&gt;alert'

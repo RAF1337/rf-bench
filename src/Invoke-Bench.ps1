@@ -12,7 +12,9 @@
     Task outcome: 'done' (graded to the end), 'aborted' (Claude timeout / rate limit / no
     result, an attempt without a session id 'no-session', grader infrastructure failure
     'infra', or an unexpected error 'error'; resumable)
-    or 'invalid' (transcript leak, or the leak scan failed).
+    or 'invalid' (transcript leak, or the leak scan failed). Before the first agent call every
+    planned task's reference solution is graded (cached under results/_gold, skip with
+    -SkipPreflight); runs of a task whose reference is not fully right are 'skipped' ('gold-failed').
 
 .EXAMPLE
     pwsh src/Invoke-Bench.ps1 -Profile baseline -Tasks T001,T002 -Repeat 3
@@ -33,13 +35,15 @@ param(
     [string]$Resume,
     [string]$RunId,
     [switch]$KeepWorkspace,
+    # Skip grading the reference solutions before the run (see Get-GoldResult).
+    [switch]$SkipPreflight,
     [string]$ConfigPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results') {
+foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results', 'Gold') {
     Import-Module (Join-Path $PSScriptRoot "$m.psm1")
 }
 Import-Module (Join-Path $PSScriptRoot 'Checks\AlParser.psm1')
@@ -369,8 +373,29 @@ try {
         BasePrompt  = $basePrompt
     }
 
+    # Gold preflight: a task whose reference solution is not fully right is broken and never given
+    # to Claude. A grading failure throws here, before any agent call, and marks nothing.
+    $skipTasks = @{}
+    if (-not $SkipPreflight) {
+        $compilerVersion = [string]$record.versions.compiler.version
+        foreach ($id in @($plan | ForEach-Object { $_.TaskId } | Select-Object -Unique)) {
+            Write-Host "gold preflight $id ..."
+            $gold = Get-GoldResult -Config $cfg -Task $tasksById[$id] -CacheDir (Join-Path $resultsRoot '_gold') `
+                -BcArtifact ([string]$record.versions.bcArtifact) -CompilerVersion $compilerVersion `
+                -GraderDir (Join-Path (Get-CanonicalPath $cfg.TempRoot) "$RunId\_grader\_gold\$id")
+            if (-not $gold.FullyRight) {
+                Write-Warning "task $id skipped: its reference solution is not fully right (gold-failed)"
+                $skipTasks[$id] = $true
+            }
+        }
+        foreach ($w in @($plan | Where-Object { $skipTasks.ContainsKey($_.TaskId) })) {
+            Set-TaskOutcome $record $w.TaskId $w.Repeat -Status skipped -AbortReason 'gold-failed'
+        }
+        if ($skipTasks.Count) { Save-RunRecord $record $runJson }
+    }
+
     Write-Host "Run ${RunId}: $($plan.Count) task run(s), profile $Profile, model $Model, MCP $($harness.McpMode)"
-    foreach ($w in $plan) {
+    foreach ($w in @($plan | Where-Object { -not $skipTasks.ContainsKey($_.TaskId) })) {
         $task = $tasksById[$w.TaskId]
         Write-Host "$($w.TaskId)/$($w.Repeat)"
         try {
