@@ -230,12 +230,7 @@ function Invoke-GradeCore($Config, $Task, [string]$AgentAppDir, [string]$GraderD
             else {
                 $null = Publish-BenchApp $Config -AppFile $testBuild.AppFile
                 $tests = @(Invoke-BenchTests $Config -TestAppId $Task.TestAppId | Where-Object { $_ })
-                if ($tests.Count -eq 0) {
-                    $tests = @([pscustomobject]@{
-                            Codeunit = 'Test run'; Name = 'Results'; Passed = $false
-                            Message = 'The test run returned no results.'; CallStack = $null; IsBudget = $false
-                        })
-                }
+                if ($tests.Count -eq 0) { throw 'infra: the test run returned no results' }
             }
         }
     }

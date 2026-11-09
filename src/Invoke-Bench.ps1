@@ -137,14 +137,27 @@ function Invoke-TaskRun {
             }
             $sessionId = $agent.SessionId
 
-            try {
-                $grade = Invoke-Grade -Config $Ctx.Config -Task $Task -AgentAppDir (Join-Path $ws.Ws 'app') -GraderDir $ws.GraderDir -Attempt $n
+            # Grading infrastructure can fail independently of the agent's work: retry the grade
+            # for the same attempt (never re-invoking Claude) before giving up as infra.
+            $grade = $null; $gradeError = $null
+            for ($try = 0; $try -le $Ctx.Config.Grader.InfraRetries; $try++) {
+                try {
+                    $grade = Invoke-Grade -Config $Ctx.Config -Task $Task -AgentAppDir (Join-Path $ws.Ws 'app') -GraderDir $ws.GraderDir -Attempt $n
+                    $gradeError = $null
+                    break
+                }
+                catch {
+                    $gradeError = $_.Exception.Message
+                    if ($try -lt $Ctx.Config.Grader.InfraRetries) {
+                        Write-Warning "$taskId/$Rep attempt ${n}: grading failed ($gradeError); retrying ($($try + 1)/$($Ctx.Config.Grader.InfraRetries))"
+                    }
+                }
             }
-            catch {
-                Write-Warning "$taskId/$Rep attempt ${n}: grading failed: $($_.Exception.Message)"
+            if ($null -ne $gradeError) {
+                Write-Warning "$taskId/$Rep attempt ${n}: grading failed: $gradeError"
                 Add-AttemptRecord $record $taskId $Rep $agent $null ''
                 Save-RunRecord $record $Ctx.RunJson
-                $status = 'aborted'; $reason = 'infra'; $errorText = $_.Exception.Message
+                $status = 'aborted'; $reason = 'infra'; $errorText = $gradeError
                 break
             }
 

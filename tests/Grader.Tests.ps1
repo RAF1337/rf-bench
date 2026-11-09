@@ -287,12 +287,12 @@ Describe 'Invoke-Grade' {
         $g.FullyRight | Should -BeFalse
     }
 
-    It 'an empty test run does not pass' {
+    It 'an empty test run is an infra failure and still removes both apps' {
         Set-BackendMocks -Tests @()
-        $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
-        $g.TestsPassed | Should -BeFalse
-        $g.FullyRight | Should -BeFalse
-        @($g.Tests | Where-Object { -not $_.Passed }).Count | Should -Be 1
+        { Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1 } |
+            Should -Throw 'infra: the test run returned no results'
+        $script:Calls | Should -Contain "remove:$($script:Task.TestAppId)"
+        @($script:Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -BeGreaterOrEqual 2
     }
 
     It 'fullyRight requires checks' {

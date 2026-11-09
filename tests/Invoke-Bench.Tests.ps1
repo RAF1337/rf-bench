@@ -120,6 +120,7 @@ Describe 'Invoke-Bench' {
             Claude   = [pscustomobject]@{ DefaultModel = 'model-default'; MaxTurns = 60; TimeoutMinutes = 30; MaxAttempts = 3 }
             Auth     = [pscustomobject]@{ Mode = 'subscription'; TokenEnvVar = 'X'; ApiKeyEnvVar = 'Y' }
             Paths    = [pscustomobject]@{ AlParserDll = '' }
+            Grader   = [pscustomobject]@{ InfraRetries = 0 }
         }
         New-Profile 'strictp' @{ description = 'strict'; mcpMode = 'strict'; mcpServers = @{ mslearn = @{ type = 'http'; url = 'https://x' } }
             plugins = @(@{ name = 'p1'; marketplace = 'mk'; marketplaceSource = 'rf/mk' })
@@ -210,6 +211,29 @@ Describe 'Invoke-Bench' {
             $t1.error | Should -BeLike '*container is down*'
             @($t1.attempts).Count | Should -Be 1
             (Get-TaskEntry $run T002).status | Should -Be 'done'
+        }
+
+        It 'retries grading after an infra error without re-invoking Claude' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 2 }
+            $global:BT.Grades.Enqueue('throw'); $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null
+            $t = Get-TaskEntry (Read-Run r1) T001
+            $t.status | Should -Be 'done'
+            @($t.attempts).Count | Should -Be 1
+            $global:BT.GradeCalls.Count | Should -Be 2
+            $global:BT.GradeCalls.Attempt | Should -Be @(1, 1)
+            $global:BT.ClaudeCalls.Count | Should -Be 1
+        }
+
+        It 'aborts as infra only after InfraRetries additional grading failures' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 2 }
+            1..3 | ForEach-Object { $global:BT.Grades.Enqueue('throw') }
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null
+            $t = Get-TaskEntry (Read-Run r1) T001
+            $t.status | Should -Be 'aborted'
+            $t.abortReason | Should -Be 'infra'
+            $global:BT.GradeCalls.Count | Should -Be 3
+            $global:BT.ClaudeCalls.Count | Should -Be 1
         }
 
         It 'marks the task invalid when the transcript leaked' {
