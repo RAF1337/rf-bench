@@ -16,10 +16,12 @@
         solution), it compiles, passes the functional tests and fails at least one Budget_
         test, which shows that the budgets can fail;
       - for bugfix and feature tasks, assignment/app is not fully right (the task is not
-        already solved).
+        already solved);
+      - the hidden tests lint clean (no hollow or nondeterministic tests); -LintOnly runs just
+        this check, offline.
 
-    Exit codes: 0 = valid, 1 = the task is invalid (a rule above fails or the task does not
-    load), 2 = validator error (configuration, Docker, compiler or grader infrastructure).
+    Exit codes: 0 = valid, 1 = the task is invalid (a rule above fails, the task does not
+    load or, with -LintOnly, a lint finding), 2 = validator error (configuration, Docker, compiler or grader infrastructure).
 
 .EXAMPLE
     pwsh src/Test-Task.ps1 -Task T001
@@ -30,13 +32,15 @@ param(
     # Folder holding the task folders. Default: <repo>/tasks.
     [string]$TasksRoot,
     [string]$ConfigPath,
-    [switch]$SwitchDocker
+    [switch]$SwitchDocker,
+    # Only lint the task's hidden tests (no config, Docker or compiler needed).
+    [switch]$LintOnly
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-foreach ($m in 'Config', 'Task', 'Backend.Docker', 'Grader') {
+foreach ($m in 'Config', 'Task', 'Backend.Docker', 'Grader', 'TestLint') {
     Import-Module (Join-Path $PSScriptRoot "$m.psm1")
 }
 Import-Module (Join-Path $PSScriptRoot 'Checks\AlParser.psm1')
@@ -169,16 +173,27 @@ function Test-StarterApp($Ctx) {
     Write-Host "  ok   ${name}: not fully right ($((Get-GradeReasons $g | Select-Object -First 1)))"
 }
 
+# One line per lint finding in the hidden tests.
+function Get-LintProblems($Task) {
+    @(Get-TestLintFindings -TestsDir $Task.TestsDir | ForEach-Object { "$($_.File):$($_.Line) $($_.Rule) $($_.Detail)" })
+}
+
 # --- main ----------------------------------------------------------------------------------------
 
-try {
-    $cfg = if ($ConfigPath) { Get-BenchConfig -Path $ConfigPath } else { Get-BenchConfig }
+# -LintOnly must work offline, so the config is not loaded for it.
+if ($LintOnly) {
+    if (-not $TasksRoot) { $TasksRoot = Join-Path $PSScriptRoot '..\tasks' }
 }
-catch {
-    Write-Host "validator error: $($_.Exception.Message)"
-    exit 2
+else {
+    try {
+        $cfg = if ($ConfigPath) { Get-BenchConfig -Path $ConfigPath } else { Get-BenchConfig }
+    }
+    catch {
+        Write-Host "validator error: $($_.Exception.Message)"
+        exit 2
+    }
+    if (-not $TasksRoot) { $TasksRoot = Join-Path $cfg.RepoRoot 'tasks' }
 }
-if (-not $TasksRoot) { $TasksRoot = Join-Path $cfg.RepoRoot 'tasks' }
 
 $taskDir = Join-Path $TasksRoot $Task
 try {
@@ -187,6 +202,14 @@ try {
 }
 catch {
     Write-Host "${Task}: invalid: $($_.Exception.Message)"
+    exit 1
+}
+
+if ($LintOnly) {
+    $found = @(Get-LintProblems $benchTask)
+    foreach ($f in $found) { Write-Host "  FAIL tests: $f" }
+    if ($found.Count -eq 0) { Write-Host "$($benchTask.Id): tests lint clean"; exit 0 }
+    Write-Host "$($benchTask.Id): $($found.Count) lint finding(s)"
     exit 1
 }
 
@@ -201,6 +224,7 @@ try {
 
     $ctx = [pscustomobject]@{ Config = $cfg; Task = $benchTask }
     Write-Host "Validating $($benchTask.Id) ($($benchTask.Type)): $($benchTask.Title)"
+    foreach ($f in Get-LintProblems $benchTask) { Add-Problem 'tests' $f }
     Test-FullyRight $ctx 'solution/app' $benchTask.SolutionAppDir
     Test-FullyRight $ctx 'solution/variants/alt' $benchTask.AltDir
     Test-BadVariant $ctx

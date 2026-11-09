@@ -32,6 +32,12 @@ BeforeAll {
         }
     }
 
+    function Set-LintTest([string]$TaskDir, [string]$Body) {
+        $al = "codeunit 70199 `"L`"`n{`n    Subtype = Test;`n`n    [Test]`n    procedure P()`n    begin`n$Body`n    end;`n}"
+        $dir = Join-Path $TaskDir 'solution\tests\src'
+        New-Item -ItemType Directory $dir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir 'Lint.Codeunit.al') -Value $al
+    }
     function Invoke-Validator([hashtable]$Extra = @{}) {
         $out = & $script:Validator -Task TX01 -TasksRoot $script:Tasks @Extra 6>&1 2>&1 3>&1 | Out-String
         [pscustomobject]@{ Exit = $LASTEXITCODE; Output = $out }
@@ -337,6 +343,35 @@ Describe 'Test-Task' {
             $out = & $script:Validator -Task TX99 -TasksRoot $script:Tasks 6>&1 2>&1 | Out-String
             $LASTEXITCODE | Should -Be 1
             $out | Should -Match 'TX99'
+        }
+    }
+
+    Context 'test lint' {
+
+        It '-LintOnly exits 0 on a clean task without config, grading or Docker' {
+            Set-LintTest $script:TaskDir "        Assert.IsTrue(true, 'x');"
+            $r = Invoke-Validator @{ LintOnly = $true }
+            $r.Exit | Should -Be 0
+            Should -Invoke Get-BenchConfig -Times 0 -Exactly
+            Should -Invoke Invoke-Grade -Times 0 -Exactly
+            $global:TT.Docker.Count | Should -Be 0
+        }
+
+        It '-LintOnly exits 1 and prints the finding' {
+            Set-LintTest $script:TaskDir '        Foo();'
+            $r = Invoke-Validator @{ LintOnly = $true }
+            $r.Exit | Should -Be 1
+            $r.Output | Should -Match 'src[\\/]Lint\.Codeunit\.al:6 no-assertion'
+            Should -Invoke Get-BenchConfig -Times 0 -Exactly
+            Should -Invoke Invoke-Grade -Times 0 -Exactly
+        }
+
+        It 'normal mode reports lint findings as problems, exits 1 and still grades' {
+            Set-LintTest $script:TaskDir '        Foo();'
+            $r = Invoke-Validator
+            $r.Exit | Should -Be 1
+            $r.Output | Should -Match 'tests: src[\\/]Lint\.Codeunit\.al:6 no-assertion'
+            $global:TT.Calls.Variant | Sort-Object | Should -Be @('alt', 'assignment', 'bad', 'solution')
         }
     }
 }

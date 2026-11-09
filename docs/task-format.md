@@ -73,3 +73,18 @@ compiler folder required) and checks that:
 Exit codes: 0 valid, 1 task invalid, 2 validator error (configuration, Docker, compiler or grader
 infrastructure). Each graded app uses its own grader folder under `<TempRoot>\validate\<taskId>`.
 Pass `-SwitchDocker` to switch Docker to Windows containers for the run and back to Linux after.
+## Test lint
+
+`pwsh src/Test-Task.ps1 -Task Tnnn -LintOnly` lints the hidden tests in `solution/tests` as plain
+text (comments and string literals stripped), with no config, Docker or compiler; it exits 0 when
+clean and 1 otherwise. Without `-LintOnly`, the same lint runs first in the normal validation and
+each finding becomes a problem `tests: <file>:<line> <rule> <detail>`; grading continues. Only
+`[Test]` procedures in codeunits with `Subtype = Test` are checked. Rules:
+
+- `no-assertion`: a `[Test]` procedure has no `Assert.` call (any variable whose name contains
+  `Assert`), no `asserterror` and no `Error(`.
+- `exit-before-assertion`: an `exit` comes before the first assertion, so the test can return
+  without asserting.
+- `nondeterministic`: the test codeunit uses `Random(`, `Randomize`, `CurrentDateTime` or `Today`,
+  or calls `Any.` (codeunit "Any") without `Any.SetDefaultSeed(` or `Any.SetSeed(` anywhere in
+  the same file. `WorkDate` is allowed. Use fixed dates and values instead.
