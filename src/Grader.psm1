@@ -6,6 +6,7 @@ Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'Backend.Docker.psm1')
 Import-Module (Join-Path $PSScriptRoot 'Checks/Checks.psm1')
+Import-Module (Join-Path $PSScriptRoot 'Checks/AlParser.psm1')
 
 # Copies the contents of $Source into a new, empty $Destination. A missing source gives an
 # empty destination, so the compile reports the missing app.json.
@@ -65,22 +66,28 @@ function ConvertTo-AgentPath([string[]]$Lines, [object[]]$Map) {
 
 # Names the hidden test framework uses; an agent object with one of these would shadow it.
 $script:ReservedNameRx = [regex]::new('^(Assert|Any|Library( - |\s).*|Test Runner.*)$', 'IgnoreCase')
-$script:ObjectDeclRx = [regex]::new('(?im)^\s*(table|tableextension|page|pageextension|pagecustomization|codeunit|report|reportextension|query|xmlport|enum|enumextension|interface|permissionset|permissionsetextension|profile|controladdin|entitlement)\s+(\d+\s+)?("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)')
 
-# One message per agent object whose name is reserved by the test framework. Paths are relative
-# to the app folder and prefixed 'app\', so the message never shows an absolute grader path.
-function Get-ReservedObjectViolations([string]$AppDir) {
+$script:OtherObjectKinds = @('EnumType', 'EnumExtensionType', 'Interface', 'PermissionSet', 'PermissionSetExtension', 'Entitlement')
+
+# One message per agent object whose name is reserved by the test framework. Objects come from
+# the AL compiler's own parser, so comments, strings, attributes and one-line files cannot hide
+# one. Paths are relative to the app folder and prefixed 'app\', so the message never shows an
+# absolute grader path. Only <app root>\.alpackages is skipped; a read or parse failure throws.
+function Get-ReservedObjectViolations($Config, [string]$AppDir) {
+    $null = Import-AlParser -Config $Config
     $root = [IO.Path]::GetFullPath($AppDir).TrimEnd('\', '/')
-    $files = Get-ChildItem -LiteralPath $AppDir -Recurse -File -Filter '*.al' -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName.Substring($root.Length) -notmatch '(?i)[\\/]\.alpackages[\\/]' }
+    $symbols = $root + '\.alpackages\'
+    $files = Get-ChildItem -LiteralPath $AppDir -Recurse -File -Filter '*.al' -Force -ErrorAction Stop |
+        Where-Object { -not $_.FullName.StartsWith($symbols, [StringComparison]::OrdinalIgnoreCase) }
     foreach ($f in $files) {
-        $text = Get-Content -LiteralPath $f.FullName -Raw
-        if (-not $text) { continue }
-        $text = [regex]::Replace($text, '(?s)/\*.*?\*/', '')
-        $text = [regex]::Replace($text, '//[^\r\n]*', '')
+        $tree = Get-AlSyntaxTree -File $f.FullName
         $rel = 'app\' + $f.FullName.Substring($root.Length).TrimStart('\', '/').Replace('/', '\')
-        foreach ($m in $script:ObjectDeclRx.Matches($text)) {
-            $name = $m.Groups[3].Value.Trim('"')
+        foreach ($node in $tree.GetRoot().DescendantNodes()) {
+            # Most object kinds end in 'Object'; the parser names the others (enum, interface,
+            # permission set, entitlement) differently.
+            $kind = "$($node.Kind)"
+            if (-not ($kind.EndsWith('Object') -or $kind -in $script:OtherObjectKinds)) { continue }
+            $name = ConvertTo-AlName $node.Name.ToString()
             if ($script:ReservedNameRx.IsMatch($name)) {
                 "${rel}: object name '$name' is reserved by the test framework. Rename the object."
             }
@@ -168,7 +175,7 @@ function Invoke-GradeCore($Config, $Task, [string]$AgentAppDir, [string]$GraderD
         , @($GraderDir, $script:GraderToken)
     )
 
-    $violations = [string[]]@(Get-ReservedObjectViolations $appDir)
+    $violations = [string[]]@(Get-ReservedObjectViolations $Config $appDir)
     if ($violations.Count) {
         $grade.CompileErrors = $violations
         $grade.Guard = 'reserved-name'

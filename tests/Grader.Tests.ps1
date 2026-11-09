@@ -417,6 +417,8 @@ Describe 'Reserved object-name guard' {
         @{ Decl = 'interface "Any"'; Name = 'Any' }
         @{ Decl = 'page 50101 "test runner x"'; Name = 'test runner x' }
         @{ Decl = 'codeunit Assert'; Name = 'Assert' }
+        @{ Decl = 'enum 50100 Assert'; Name = 'Assert' }
+        @{ Decl = 'permissionset 50100 "Library Perms"'; Name = 'Library Perms' }
         @{ Decl = 'codeunit 50100 "Library Card"'; Name = 'Library Card' }
     ) {
         $g = Grade-WithSource "$Decl`n{`n}"
@@ -441,6 +443,24 @@ Describe 'Reserved object-name guard' {
         $g.Guard | Should -BeNullOrEmpty
         $g.Compiled | Should -BeTrue
         Should -Invoke -ModuleName Grader Invoke-AlCompile -Times 2 -Exactly
+    }
+
+    It 'rejects <Why>' -ForEach @(
+        @{ Why = 'an object hidden between a // /* and a // */ line'; Src = "// /*`ncodeunit 50100 Assert`n{`n}`n// */" }
+        @{ Why = 'an object after /* and */ inside string literals'; Src = "codeunit 50101 Fine`n{`n    var A: Text; B: Text;`n    trigger OnRun()`n    begin`n        A := '/*';`n        B := '*/';`n    end;`n}`ncodeunit 50100 Assert`n{`n}" }
+        @{ Why = 'a second object on the same line'; Src = "codeunit 50101 Foo { } codeunit 50100 Assert { }" }
+        @{ Why = 'an object behind an attribute on the same line'; Src = "[Obsolete('x')] codeunit 50100 Assert`n{`n}" }
+    ) {
+        $g = Grade-WithSource $Src
+        $g.Guard | Should -BeExactly 'reserved-name'
+        @($g.CompileErrors) | Should -Contain "app\src\Shadow.Codeunit.al: object name 'Assert' is reserved by the test framework. Rename the object."
+        Should -Invoke -ModuleName Grader Invoke-AlCompile -Times 0 -Exactly
+    }
+
+    It 'checks .alpackages only at the app root' {
+        $g = Grade-WithSource "codeunit 50100 Assert`n{`n}" 'src\.alpackages\Assert.Codeunit.al'
+        $g.Guard | Should -BeExactly 'reserved-name'
+        @($g.CompileErrors)[0] | Should -BeLike 'app\src\.alpackages\Assert.Codeunit.al: *'
     }
 
     It 'ignores files under .alpackages' {
