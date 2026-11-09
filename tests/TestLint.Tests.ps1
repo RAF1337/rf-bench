@@ -31,6 +31,12 @@ Describe 'Get-TestLintFindings' {
         It 'passes with Assert.IsTrue' {
             (Get-Findings (Test-Proc '        Assert.IsTrue(true, ''x'');')).Count | Should -Be 0
         }
+        It 'flags a test whose only call is on an identifier merely containing Assert' {
+            (Get-Findings (Test-Proc '        AssertLog.Insert();')).Rule | Should -Be 'no-assertion'
+        }
+        It 'accepts a quoted Library Assert call' {
+            (Get-Findings (Test-Proc '        "Library Assert".AreEqual(1, 1, ''x'');')).Count | Should -Be 0
+        }
         It 'passes with asserterror' {
             (Get-Findings (Test-Proc '        asserterror Foo();')).Count | Should -Be 0
         }
@@ -104,6 +110,9 @@ Describe 'Get-TestLintFindings' {
         It 'ignores tokens in comments and string literals' {
             $code = "        // Random(1) here`n        /* Today`n           CurrentDateTime */`n        Msg := 'Today and ''Random(1)'' ';`n        Assert.IsTrue(true, 'x');"
             (Get-Findings (Test-Proc $code)).Count | Should -Be 0
+        }
+        It 'does not flag tokens inside quoted identifiers' {
+            (Get-Findings (Test-Proc "        X := Rec.""Posted Today"";`n        Assert.IsTrue(true, 'x');")).Count | Should -Be 0
         }
         It 'does not flag WorkDate' {
             (Get-Findings (Test-Proc "        D := WorkDate();`n        Assert.IsTrue(true, 'x');")).Count | Should -Be 0

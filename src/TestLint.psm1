@@ -49,7 +49,7 @@ function Remove-AlCommentsAndStrings([string]$Text) {
 $script:HeaderRx = [regex]'^\s*(?:(?:local|internal|protected)\s+)?(?:procedure|trigger)\s+("[^"]+"|\w+)'
 $script:AttributeRx = [regex]'^\s*\[\s*[A-Za-z]+\s*(?:\(|\])'
 $script:TestAttrRx = [regex]'(?i)^\s*\[\s*Test\s*\]'
-$script:AssertionRx = [regex]'(?i)\b\w*Assert\w*\s*\.\s*\w+|\basserterror\b|\bError\s*\('
+$script:AssertionRx = [regex]'(?i)(?<!\w)(?:\w*Assert|"[^"\r\n]*Assert")\s*\.\s*\w+|\basserterror\b|\bError\s*\('
 $script:ExitRx = [regex]'(?i)\bexit\b'
 $script:NondetRx = @(
     @{ Rx = [regex]'(?i)\bRandom\s*\('; Name = 'Random()' }
@@ -74,6 +74,8 @@ function Get-TestLintFindings {
         $text = Remove-AlCommentsAndStrings $raw
         if ($text -notmatch '(?i)\bSubtype\s*=\s*Test\s*;') { continue }
         $lines = $text -split "`r?`n"
+        # Quoted identifiers ("Posted Today") must not match the nondeterminism tokens.
+        $codeLines = [regex]::Replace($text, '"[^"\r\n]*"', { param($m) ' ' * $m.Length }) -split "`r?`n"
 
         # Procedure headers: line index, name, and whether a [Test] attribute precedes it.
         $procs = [Collections.Generic.List[object]]::new()
@@ -120,7 +122,7 @@ function Get-TestLintFindings {
         for ($i = 0; $i -lt $lines.Count; $i++) {
             if ($procByLine.ContainsKey($i)) { $current = $procByLine[$i] }
             foreach ($n in $script:NondetRx) {
-                if ($n.Rx.IsMatch($lines[$i])) {
+                if ($n.Rx.IsMatch($codeLines[$i])) {
                     [pscustomobject]@{ File = $rel; Line = $i + 1; Procedure = $current; Rule = 'nondeterministic'
                         Detail = "uses $($n.Name)" }
                 }
