@@ -82,7 +82,7 @@ function Get-McNemarExactP {
         if ($i -gt 0) { $logC += [Math]::Log($n - $i + 1) - [Math]::Log($i) }
         $tail += [Math]::Exp($logC - $n * [Math]::Log(2))
     }
-    [Math]::Min([double]1, [Math]::Round(2 * $tail, 12))
+    [Math]::Min([double]1, 2 * $tail)
 }
 
 function Get-HolmAdjusted {
@@ -119,7 +119,9 @@ function Get-BootstrapCi {
 
 # Seed from the paired task set and hashes, so a changed task set gives a different but repeatable resample.
 function Get-PairedSeed([string[]]$Lines) {
-    $text = (@($Lines) | Sort-Object -CaseSensitive) -join "`n"
+    $sorted = [string[]]@($Lines)
+    [Array]::Sort($sorted, [StringComparer]::Ordinal)
+    $text = $sorted -join "`n"
     $bytes = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($text))
     [int][Math]::Min([Math]::Abs([long][BitConverter]::ToInt32($bytes, 0)), [int]::MaxValue)
 }
@@ -137,7 +139,8 @@ function Get-PairedComparison {
     foreach ($id in @($b.PerTask.Keys + $c.PerTask.Keys | Sort-Object -Unique)) {
         if (-not ($b.PerTask.ContainsKey($id) -and $c.PerTask.ContainsKey($id))) { $excluded.Add("$id (missing)"); continue }
         $hb = $b.PerTask[$id].Hash; $hc = $c.PerTask[$id].Hash
-        if ($null -eq $hb -or $null -eq $hc) { $unknown = $true }
+        if ($null -eq $hb -and $null -eq $hc) { $unknown = $true }
+        elseif ($null -eq $hb -or $null -eq $hc) { $excluded.Add("$id (hash unknown)"); continue }
         elseif ($hb -ne $hc) { $excluded.Add("$id (hash differs)"); continue }
         $paired.Add($id)
     }

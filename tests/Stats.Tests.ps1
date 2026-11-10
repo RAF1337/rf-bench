@@ -46,7 +46,14 @@ Describe 'Get-McNemarExactP' {
         @{ b = 0; c = 6; want = 0.03125 }, @{ b = 1; c = 5; want = 0.21875 }, @{ b = 0; c = 0; want = 1.0 }
         @{ b = 6; c = 0; want = 0.03125 }, @{ b = 5; c = 1; want = 0.21875 }, @{ b = 3; c = 3; want = 1.0 }
     ) {
-        Get-McNemarExactP -B $b -C $c | Should -BeExactly $want
+        $p = Get-McNemarExactP -B $b -C $c
+        $p | Should -BeGreaterThan ($want * (1 - 1e-9))
+        $p | Should -BeLessThan ($want * (1 + 1e-9))
+    }
+    It 'does not collapse small p-values to zero' {
+        $p = Get-McNemarExactP -B 0 -C 45
+        $p | Should -BeGreaterThan 0
+        $p | Should -BeLessThan 1e-12
     }
 }
 
@@ -176,6 +183,14 @@ Describe 'Get-PairedComparison' {
         $r.PairedTasks | Should -Be 12
         $r.HashesUnknown | Should -BeTrue
         @($r.ExcludedTasks).Count | Should -Be 0
+    }
+    It 'excludes a task when only one run has a hash for it' {
+        $b, $c = New-ManyRuns 12 1 1
+        $c.versions = [pscustomobject]@{}
+        $r = Get-PairedComparison -Baseline $b -Candidate $c
+        $r.PairedTasks | Should -Be 0
+        $r.ExcludedTasks | Should -Contain 'T001 (hash unknown)'
+        $r.Verdict | Should -Be 'too few tasks'
     }
     It 'counts McNemar discordant first-try pairs by direction' {
         $ids = 1..12 | ForEach-Object { 'T{0:D3}' -f $_ }
