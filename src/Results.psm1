@@ -128,13 +128,23 @@ function Get-PendingWork {
     }
 }
 
-# SHA256 over sorted relative paths and file bytes of a whole folder.
+# SHA256 over sorted relative paths and file bytes of a whole folder. -ExcludeDirectories names
+# directories skipped at any depth (case-insensitive); -ExcludeExtensions names file extensions
+# skipped (for example '.app', case-insensitive).
 function Get-FolderHash {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string[]]$ExcludeDirectories = @(),
+        [string[]]$ExcludeExtensions = @()
+    )
     $root = (Resolve-Path -LiteralPath $Path).Path.TrimEnd('\', '/')
     $files = Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object {
-        [pscustomobject]@{ Rel = $_.FullName.Substring($root.Length + 1).Replace('\', '/'); Full = $_.FullName }
+        [pscustomobject]@{ Rel = $_.FullName.Substring($root.Length + 1).Replace('\', '/'); Full = $_.FullName; Ext = $_.Extension }
+    } | Where-Object {
+        $f = $_
+        $dirs = @($f.Rel.Split('/') | Select-Object -SkipLast 1)
+        -not ($dirs | Where-Object { $_ -in $ExcludeDirectories }) -and $f.Ext -notin $ExcludeExtensions
     } | Sort-Object { $_.Rel } -Culture '' -CaseSensitive
     $h = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
     try {

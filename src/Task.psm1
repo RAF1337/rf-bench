@@ -102,7 +102,7 @@ function Get-BenchTask {
         Categories     = [string[]]$cats
         Family         = $family
         Split          = $split
-        Hash           = Get-FolderHash -Path $root
+        Hash           = Get-FolderHash -Path $root -ExcludeDirectories '.alpackages', '.output', '.vscode', '.snapshots' -ExcludeExtensions '.app'
         Root           = $root
         AssignmentDir  = $assign
         SolutionAppDir = $solApp

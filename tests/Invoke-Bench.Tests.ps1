@@ -44,10 +44,12 @@ BeforeAll {
         $global:BT.GoldCalls = [Collections.Generic.List[object]]::new()
         $global:BT.GoldFails = @()
         $global:BT.GoldThrows = $false
+        $global:BT.GoldThrowsLeft = 0
         $global:BT.Order = [Collections.Generic.List[string]]::new()
         Mock Get-GoldResult {
             $global:BT.Order.Add("gold:$($Task.Id)")
             $global:BT.GoldCalls.Add([pscustomobject]@{ TaskId = $Task.Id; CacheDir = $CacheDir; BcArtifact = $BcArtifact; CompilerVersion = $CompilerVersion; GraderDir = $GraderDir })
+            if ($global:BT.GoldThrowsLeft -gt 0) { $global:BT.GoldThrowsLeft--; throw 'infra: gold grading failed' }
             if ($global:BT.GoldThrows) { throw 'infra: gold grading failed' }
             [pscustomobject]@{ FullyRight = ($Task.Id -notin $global:BT.GoldFails); Cached = $false }
         }
@@ -389,6 +391,39 @@ Describe 'Invoke-Bench' {
             { & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null } | Should -Throw '*gold grading failed*'
             $global:BT.ClaudeCalls.Count | Should -Be 0
             @((Read-Run r1).tasks | Where-Object { $_.status -eq 'skipped' }).Count | Should -Be 0
+        }
+        It 'retries a gold grading throw up to InfraRetries times before continuing' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 2 }
+            $global:BT.GoldThrowsLeft = 2
+            $warnings = & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>&1
+            @($warnings | Where-Object { $_ -is [System.Management.Automation.WarningRecord] -and $_.Message -like '*gold preflight T001*retrying*' }).Count | Should -Be 2
+            $global:BT.GoldCalls.Count | Should -Be 3
+            $global:BT.ClaudeCalls.Count | Should -BeGreaterThan 0
+        }
+        It 'stops the run when gold grading still throws after InfraRetries retries' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 1 }
+            $global:BT.GoldThrows = $true
+            { & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null } | Should -Throw '*gold grading failed*'
+            $global:BT.GoldCalls.Count | Should -Be 2
+            $global:BT.ClaudeCalls.Count | Should -Be 0
+        }
+        It 'keys the gold cache on the current artifact and compiler on -Resume' {
+            $exe = (Get-Process -Id $PID).Path
+            Mock Get-AlcPath { $exe }.GetNewClosure()
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null
+            $path = Join-Path $script:Repo 'results\r1\run.json'
+            $j = Get-Content $path -Raw | ConvertFrom-Json -AsHashtable
+            $j.versions.bcArtifact = 'Old/xx/1.0'
+            $j.versions.compiler.version = 'old-version'
+            $j | ConvertTo-Json -Depth 20 | Set-Content $path
+            Set-Mocks
+            Mock Get-AlcPath { $exe }.GetNewClosure()
+            $global:BT.Config.Bc.Version = '30.0.0.1'
+            $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Resume r1 6>$null
+            $global:BT.GoldCalls[0].BcArtifact | Should -Be 'Sandbox/w1/30.0.0.1'
+            $global:BT.GoldCalls[0].CompilerVersion | Should -Be ((Get-Item $exe).VersionInfo.FileVersion)
         }
         It 'switches Docker back to linux when the preflight throws' {
             $global:BT.GoldThrows = $true

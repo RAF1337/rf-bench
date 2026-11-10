@@ -377,12 +377,24 @@ try {
     # to Claude. A grading failure throws here, before any agent call, and marks nothing.
     $skipTasks = @{}
     if (-not $SkipPreflight) {
-        $compilerVersion = [string]$record.versions.compiler.version
+        # Cache key uses the current artifact and compiler (they may differ from the run start on -Resume).
+        $compilerVersion = [string](Get-FileVersion $alc)
+        $bcArtifact = "$($cfg.Bc.ArtifactType)/$($cfg.Bc.Country)/$($cfg.Bc.Version)"
         foreach ($id in @($plan | ForEach-Object { $_.TaskId } | Select-Object -Unique)) {
             Write-Host "gold preflight $id ..."
-            $gold = Get-GoldResult -Config $cfg -Task $tasksById[$id] -CacheDir (Join-Path $resultsRoot '_gold') `
-                -BcArtifact ([string]$record.versions.bcArtifact) -CompilerVersion $compilerVersion `
-                -GraderDir (Join-Path (Get-CanonicalPath $cfg.TempRoot) "$RunId\_grader\_gold\$id")
+            $gold = $null
+            for ($try = 0; $try -le $cfg.Grader.InfraRetries; $try++) {
+                try {
+                    $gold = Get-GoldResult -Config $cfg -Task $tasksById[$id] -CacheDir (Join-Path $resultsRoot '_gold') `
+                        -BcArtifact $bcArtifact -CompilerVersion $compilerVersion `
+                        -GraderDir (Join-Path (Get-CanonicalPath $cfg.TempRoot) "$RunId\_grader\_gold\$id")
+                    break
+                }
+                catch {
+                    if ($try -ge $cfg.Grader.InfraRetries) { throw }
+                    Write-Warning "gold preflight ${id}: grading failed ($($_.Exception.Message)); retrying ($($try + 1)/$($cfg.Grader.InfraRetries))"
+                }
+            }
             if (-not $gold.FullyRight) {
                 Write-Warning "task $id skipped: its reference solution is not fully right (gold-failed)"
                 $skipTasks[$id] = $true

@@ -36,7 +36,7 @@ as `solution/app`.
 | `family` | Optional string naming the task family (for example `n-plus-one`); `null` when absent. |
 | `split` | Optional, `dev` (default) or `holdout`. |
 
-Each task has a hash: SHA256 over the relative paths and bytes of every file in the task folder. It is recorded in `run.json` as `versions.tasks`, and `-Resume` refuses to continue when a pending task changed since the run started.
+Each task has a hash: SHA256 over the relative paths and bytes of every file in the task folder except build output (directories `.alpackages`, `.output`, `.vscode`, `.snapshots` at any depth and `*.app` files). It is recorded in `run.json` as `versions.tasks`, and `-Resume` refuses to continue when a pending task changed since the run started.
 
 ## checks.json
 

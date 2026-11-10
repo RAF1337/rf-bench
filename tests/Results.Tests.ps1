@@ -148,6 +148,14 @@ Describe 'Get-FolderHash' {
         Rename-Item "$script:d\g.txt" 'h.txt'
         Get-FolderHash $script:d | Should -Not -Be $h
     }
+    It 'skips excluded directories at any depth and excluded extensions, case-insensitively' {
+        $h = Get-FolderHash $script:d -ExcludeDirectories '.alpackages' -ExcludeExtensions '.app'
+        New-Item -ItemType Directory -Force "$script:d\a\.AlPackages" | Out-Null
+        Set-Content "$script:d\a\.AlPackages\x.txt" 'x'
+        Set-Content "$script:d\a\Foo.APP" 'x'
+        Get-FolderHash $script:d -ExcludeDirectories '.alpackages' -ExcludeExtensions '.app' | Should -Be $h
+        Get-FolderHash $script:d | Should -Not -Be $h
+    }
     It 'does not depend on file creation order' {
         $e = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force "$e\a\b" | Out-Null

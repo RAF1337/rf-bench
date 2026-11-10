@@ -70,6 +70,18 @@ Describe 'Get-BenchTask' {
         Add-Content (Join-Path $p 'solution\tests\app.json') ' '
         (Get-BenchTask $p).Hash | Should -Not -Be $h
     }
+    It 'ignores git-ignored build output when hashing' {
+        $p = New-TaskCopy
+        $h = (Get-BenchTask $p).Hash
+        foreach ($rel in 'assignment\app\.alpackages\x.app', 'solution\app\.vscode\settings.json', 'solution\app\foo.app', 'solution\app\.output\o.txt', 'solution\app\.snapshots\s.bin', 'solution\app\Sub\.ALPackages\y.dll') {
+            $f = Join-Path $p $rel
+            New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null
+            Set-Content $f 'build output'
+        }
+        (Get-BenchTask $p).Hash | Should -Be $h
+        Add-Content (Join-Path $p 'solution\tests\app.json') ' '
+        (Get-BenchTask $p).Hash | Should -Not -Be $h
+    }
     It 'throws on unknown task category' {
         $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.categories = @('bogus') } }
         { Get-BenchTask $p } | Should -Throw 'TX01: *bogus*'
