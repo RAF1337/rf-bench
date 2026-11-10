@@ -33,6 +33,10 @@ as `solution/app`.
 | `area` | Free text functional area. |
 | `categories` | Subset of: `data-access`, `locking-isolation`, `transactions`, `architecture`, `naming-style`, `ui`, `error-handling`. |
 | `timeoutMinutes` | Optional per-task timeout. |
+| `family` | Optional string naming the task family (for example `n-plus-one`); `null` when absent. |
+| `split` | Optional, `dev` (default) or `holdout`. |
+
+Each task has a hash: SHA256 over the relative paths and bytes of every file in the task folder except build output (directories `.alpackages`, `.output`, `.vscode`, `.snapshots` at any depth and `*.app` files). It is recorded in `run.json` as `versions.tasks`, and `-Resume` refuses to continue when a pending task changed since the run started.
 
 ## checks.json
 
@@ -69,3 +73,21 @@ compiler folder required) and checks that:
 Exit codes: 0 valid, 1 task invalid, 2 validator error (configuration, Docker, compiler or grader
 infrastructure). Each graded app uses its own grader folder under `<TempRoot>\validate\<taskId>`.
 Pass `-SwitchDocker` to switch Docker to Windows containers for the run and back to Linux after.
+
+## Test lint
+
+`pwsh src/Test-Task.ps1 -Task Tnnn -LintOnly` lints the hidden tests in `solution/tests` as plain
+text (comments and string literals stripped), with no config, Docker or compiler; it exits 0 when
+clean and 1 otherwise. Without `-LintOnly`, the same lint runs first in the normal validation and
+each finding becomes a problem `tests: <file>:<line> <rule> <detail>`; grading continues. Only
+`[Test]` procedures in codeunits with `Subtype = Test` are checked. Rules:
+
+- `no-assertion`: a `[Test]` procedure has no call on a variable named `Assert` or ending in
+  `Assert` (`LibraryAssert`, `"Library Assert"`), no `asserterror` and no `Error(`. The
+  assertion must be in the test procedure itself: one only inside a helper procedure is still
+  reported.
+- `exit-before-assertion`: an `exit` comes before the first assertion, so the test can return
+  without asserting.
+- `nondeterministic`: the test codeunit uses `Random(`, `Randomize`, `CurrentDateTime` or `Today`,
+  or calls `Any.` (codeunit "Any") without `Any.SetDefaultSeed(` or `Any.SetSeed(` anywhere in
+  the same file. `WorkDate` is allowed. Use fixed dates and values instead.

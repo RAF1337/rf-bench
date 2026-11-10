@@ -1,7 +1,7 @@
 #Requires -Version 7.6
 Set-StrictMode -Version Latest
 
-$script:Statuses = @('pending', 'done', 'aborted', 'invalid')
+$script:Statuses = @('pending', 'done', 'aborted', 'invalid', 'skipped')
 
 function Get-MemberValue($Obj, [string]$Name) {
     if ($null -eq $Obj) { return $null }
@@ -90,7 +90,7 @@ function Set-TaskOutcome {
         [Parameter(Mandatory, Position = 0)]$Record,
         [Parameter(Mandatory, Position = 1)][string]$TaskId,
         [Parameter(Mandatory, Position = 2)][int]$Repeat,
-        [Parameter(Mandatory)][ValidateSet('pending', 'done', 'aborted', 'invalid')][string]$Status,
+        [Parameter(Mandatory)][ValidateSet('pending', 'done', 'aborted', 'invalid', 'skipped')][string]$Status,
         $Leak,
         [string]$AbortReason
     )
@@ -124,17 +124,27 @@ function Get-PendingWork {
     param([Parameter(Mandatory)][string]$RunJson)
     $rec = Get-RunRecord $RunJson
     foreach ($t in @($rec.tasks)) {
-        if ($t.status -notin 'done', 'invalid') { [pscustomobject]@{ TaskId = $t.taskId; Repeat = [int]$t.repeat } }
+        if ($t.status -notin 'done', 'invalid', 'skipped') { [pscustomobject]@{ TaskId = $t.taskId; Repeat = [int]$t.repeat } }
     }
 }
 
-# SHA256 over sorted relative paths and file bytes (profile.json included).
-function Get-ProfileHash {
+# SHA256 over sorted relative paths and file bytes of a whole folder. -ExcludeDirectories names
+# directories skipped at any depth (case-insensitive); -ExcludeExtensions names file extensions
+# skipped (for example '.app', case-insensitive).
+function Get-FolderHash {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$ProfileDir)
-    $root = (Resolve-Path -LiteralPath $ProfileDir).Path.TrimEnd('\', '/')
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string[]]$ExcludeDirectories = @(),
+        [string[]]$ExcludeExtensions = @()
+    )
+    $root = (Resolve-Path -LiteralPath $Path).Path.TrimEnd('\', '/')
     $files = Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object {
-        [pscustomobject]@{ Rel = $_.FullName.Substring($root.Length + 1).Replace('\', '/'); Full = $_.FullName }
+        [pscustomobject]@{ Rel = $_.FullName.Substring($root.Length + 1).Replace('\', '/'); Full = $_.FullName; Ext = $_.Extension }
+    } | Where-Object {
+        $f = $_
+        $dirs = @($f.Rel.Split('/') | Select-Object -SkipLast 1)
+        -not ($dirs | Where-Object { $_ -in $ExcludeDirectories }) -and $f.Ext -notin $ExcludeExtensions
     } | Sort-Object { $_.Rel } -Culture '' -CaseSensitive
     $h = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
     try {
@@ -147,6 +157,13 @@ function Get-ProfileHash {
         ([BitConverter]::ToString($h.GetHashAndReset()) -replace '-', '').ToLowerInvariant()
     }
     finally { $h.Dispose() }
+}
+
+# Profile fingerprint (profile.json included).
+function Get-ProfileHash {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ProfileDir)
+    Get-FolderHash -Path $ProfileDir
 }
 
 function ConvertTo-Sha256Hex([byte[]]$Bytes) {
@@ -178,5 +195,5 @@ function Get-ManagedSettingsHash {
     ConvertTo-Sha256Hex ([IO.File]::ReadAllBytes($Path))
 }
 
-Export-ModuleMember -Function New-RunRecord, Add-AttemptRecord, Set-TaskOutcome, Save-RunRecord, Get-RunRecord, Get-PendingWork, Get-ProfileHash,
+Export-ModuleMember -Function New-RunRecord, Add-AttemptRecord, Set-TaskOutcome, Save-RunRecord, Get-RunRecord, Get-PendingWork, Get-FolderHash, Get-ProfileHash,
     Get-McpServerHash, Get-ManagedSettingsHash

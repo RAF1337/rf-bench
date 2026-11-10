@@ -287,12 +287,12 @@ Describe 'Invoke-Grade' {
         $g.FullyRight | Should -BeFalse
     }
 
-    It 'an empty test run does not pass' {
+    It 'an empty test run is an infra failure and still removes both apps' {
         Set-BackendMocks -Tests @()
-        $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
-        $g.TestsPassed | Should -BeFalse
-        $g.FullyRight | Should -BeFalse
-        @($g.Tests | Where-Object { -not $_.Passed }).Count | Should -Be 1
+        { Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1 } |
+            Should -Throw 'infra: the test run returned no results'
+        $script:Calls | Should -Contain "remove:$($script:Task.TestAppId)"
+        @($script:Calls | Where-Object { $_ -like 'remove:*' }).Count | Should -BeGreaterOrEqual 2
     }
 
     It 'fullyRight requires checks' {
@@ -393,5 +393,95 @@ codeunit 50100 Starter
         Set-Content $stale 'old'
         $null = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
         Test-Path $stale | Should -BeFalse
+    }
+}
+
+Describe 'Reserved object-name guard' {
+    BeforeAll {
+    function Grade-WithSource([string]$Declaration, [string]$RelPath = 'src\Shadow.Codeunit.al') {
+        Set-BackendMocks
+        $agent = New-AgentApp
+        $file = Join-Path $agent $RelPath
+        New-Item -ItemType Directory (Split-Path $file -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $file $Declaration
+        Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir $agent -GraderDir $script:Grader -Attempt 1
+    }
+    }
+    BeforeEach {
+        $script:Grader = Join-Path $TestDrive "grader-$([guid]::NewGuid().ToString('N'))"
+    }
+
+    It 'rejects <Decl> without compiling' -ForEach @(
+        @{ Decl = 'codeunit 50100 Assert'; Name = 'Assert' }
+        @{ Decl = 'codeunit 50100 "Library - Sales"'; Name = 'Library - Sales' }
+        @{ Decl = 'interface "Any"'; Name = 'Any' }
+        @{ Decl = 'page 50101 "test runner x"'; Name = 'test runner x' }
+        @{ Decl = 'codeunit Assert'; Name = 'Assert' }
+        @{ Decl = 'enum 50100 Assert'; Name = 'Assert' }
+        @{ Decl = 'permissionset 50100 "Library Perms"'; Name = 'Library Perms' }
+        @{ Decl = 'codeunit 50100 "Library Card"'; Name = 'Library Card' }
+    ) {
+        $g = Grade-WithSource "$Decl`n{`n}"
+        $g.Guard | Should -BeExactly 'reserved-name'
+        $g.Compiled | Should -BeFalse
+        $g.FullyRight | Should -BeFalse
+        @($g.CompileErrors) | Should -Contain "app\src\Shadow.Codeunit.al: object name '$Name' is reserved by the test framework. Rename the object."
+        ($g.CompileErrors -join "`n") | Should -Not -Match ([regex]::Escape($script:Grader))
+        Should -Invoke -ModuleName Grader Invoke-AlCompile -Times 0 -Exactly
+        Should -Invoke -ModuleName Grader Publish-BenchApp -Times 0 -Exactly
+        Should -Invoke -ModuleName Grader Invoke-BenchTests -Times 0 -Exactly
+    }
+
+    It 'accepts <Decl>' -ForEach @(
+        @{ Decl = 'codeunit 50100 "Assertion Log"' }
+        @{ Decl = 'codeunit 50100 "Anything"' }
+        @{ Decl = 'codeunit 50100 "My Library Card"' }
+        @{ Decl = '// codeunit 50100 Assert' }
+        @{ Decl = "/* codeunit 50100 Assert`n   interface `"Any`" */" }
+    ) {
+        $g = Grade-WithSource "$Decl`ncodeunit 50199 Fine`n{`n}"
+        $g.Guard | Should -BeNullOrEmpty
+        $g.Compiled | Should -BeTrue
+        Should -Invoke -ModuleName Grader Invoke-AlCompile -Times 2 -Exactly
+    }
+
+    It 'rejects <Why>' -ForEach @(
+        @{ Why = 'an object hidden between a // /* and a // */ line'; Src = "// /*`ncodeunit 50100 Assert`n{`n}`n// */" }
+        @{ Why = 'an object after /* and */ inside string literals'; Src = "codeunit 50101 Fine`n{`n    var A: Text; B: Text;`n    trigger OnRun()`n    begin`n        A := '/*';`n        B := '*/';`n    end;`n}`ncodeunit 50100 Assert`n{`n}" }
+        @{ Why = 'a second object on the same line'; Src = "codeunit 50101 Foo { } codeunit 50100 Assert { }" }
+        @{ Why = 'an object behind an attribute on the same line'; Src = "[Obsolete('x')] codeunit 50100 Assert`n{`n}" }
+    ) {
+        $g = Grade-WithSource $Src
+        $g.Guard | Should -BeExactly 'reserved-name'
+        @($g.CompileErrors) | Should -Contain "app\src\Shadow.Codeunit.al: object name 'Assert' is reserved by the test framework. Rename the object."
+        Should -Invoke -ModuleName Grader Invoke-AlCompile -Times 0 -Exactly
+    }
+
+    It 'checks .alpackages only at the app root' {
+        $g = Grade-WithSource "codeunit 50100 Assert`n{`n}" 'src\.alpackages\Assert.Codeunit.al'
+        $g.Guard | Should -BeExactly 'reserved-name'
+        @($g.CompileErrors)[0] | Should -BeLike 'app\src\.alpackages\Assert.Codeunit.al: *'
+    }
+
+    It 'ignores files under .alpackages' {
+        $g = Grade-WithSource "codeunit 50100 Assert`n{`n}" '.alpackages\Dep\Assert.Codeunit.al'
+        $g.Guard | Should -BeNullOrEmpty
+        $g.Compiled | Should -BeTrue
+    }
+
+    It 'has a null Guard on a clean app that grades as before' {
+        Set-BackendMocks
+        $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (New-AgentApp) -GraderDir $script:Grader -Attempt 1
+        $g.PSObject.Properties.Name | Should -Contain 'Guard'
+        $g.Guard | Should -BeNullOrEmpty
+        $g.Compiled | Should -BeTrue
+        $g.FullyRight | Should -BeTrue
+    }
+
+    It 'has a Guard field on a grade that failed to compile' {
+        Set-BackendMocks -RealCompile
+        $g = Invoke-Grade -Config $script:Config -Task $script:Task -AgentAppDir (Join-Path $TestDrive 'nope\app') -GraderDir $script:Grader -Attempt 1
+        $g.PSObject.Properties.Name | Should -Contain 'Guard'
+        $g.Guard | Should -BeNullOrEmpty
     }
 }

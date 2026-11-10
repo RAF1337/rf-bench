@@ -85,6 +85,15 @@ Describe 'Get-PendingWork' {
         @(Get-PendingWork $p).Count | Should -Be 1
         (Get-RunRecord $p).tasks[2].leak.leaked | Should -BeTrue
     }
+    It 'accepts skipped and treats it as not pending' {
+        $r = New-Rec
+        Set-TaskOutcome $r 'T001' 1 -Status 'skipped' -AbortReason 'gold-failed'
+        $r.tasks[0].status | Should -Be 'skipped'
+        $r.tasks[0].abortReason | Should -Be 'gold-failed'
+        $p = Join-Path $TestDrive 'run-skipped.json'
+        Save-RunRecord $r $p
+        ($(Get-PendingWork $p) | ForEach-Object { "$($_.TaskId)/$($_.Repeat)" }) | Should -Be @('T001/2', 'T002/1')
+    }
     It 'rejects an invalid status' {
         { Set-TaskOutcome (New-Rec) 'T001' 1 -Status 'weird' } | Should -Throw
     }
@@ -116,6 +125,44 @@ Describe 'Get-ProfileHash' {
         $h2 | Should -Not -Be $h
         Set-Content "$script:d\extra.txt" 'x'
         Get-ProfileHash $script:d | Should -Not -Be $h2
+    }
+}
+
+Describe 'Get-FolderHash' {
+    BeforeEach {
+        $script:d = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force "$script:d\a\b" | Out-Null
+        Set-Content "$script:d\a\b\f.txt" 'abc' -NoNewline
+        Set-Content "$script:d\g.txt" 'g' -NoNewline
+    }
+    It 'matches Get-ProfileHash for the same folder' {
+        Get-FolderHash $script:d | Should -Be (Get-ProfileHash $script:d)
+    }
+    It 'changes when one byte of a nested file changes' {
+        $h = Get-FolderHash $script:d
+        Set-Content "$script:d\a\b\f.txt" 'abd' -NoNewline
+        Get-FolderHash $script:d | Should -Not -Be $h
+    }
+    It 'changes when a file is renamed' {
+        $h = Get-FolderHash $script:d
+        Rename-Item "$script:d\g.txt" 'h.txt'
+        Get-FolderHash $script:d | Should -Not -Be $h
+    }
+    It 'skips excluded directories at any depth and excluded extensions, case-insensitively' {
+        $h = Get-FolderHash $script:d -ExcludeDirectories '.alpackages' -ExcludeExtensions '.app'
+        New-Item -ItemType Directory -Force "$script:d\a\.AlPackages" | Out-Null
+        Set-Content "$script:d\a\.AlPackages\x.txt" 'x'
+        Set-Content "$script:d\a\Foo.APP" 'x'
+        Get-FolderHash $script:d -ExcludeDirectories '.alpackages' -ExcludeExtensions '.app' | Should -Be $h
+        Get-FolderHash $script:d | Should -Not -Be $h
+    }
+    It 'does not depend on file creation order' {
+        $e = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force "$e\a\b" | Out-Null
+        Set-Content "$e\g.txt" 'g' -NoNewline
+        Start-Sleep -Milliseconds 20
+        Set-Content "$e\a\b\f.txt" 'abc' -NoNewline
+        Get-FolderHash $e | Should -Be (Get-FolderHash $script:d)
     }
 }
 

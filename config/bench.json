@@ -17,6 +17,9 @@
     "TimeoutMinutes": 30,
     "MaxAttempts": 3
   },
+  "Grader": {
+    "InfraRetries": 2
+  },
   "Auth": {
     "Mode": "subscription",
     "TokenEnvVar": "RFBENCH_CLAUDE_OAUTH_TOKEN",

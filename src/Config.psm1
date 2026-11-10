@@ -90,6 +90,17 @@ function Get-BenchConfig {
         throw "bench.json: invalid auth.mode '$($cfg.Auth.Mode)' (expected 'subscription' or 'apiKey')"
     }
 
+    if (-not $cfg.PSObject.Properties['Grader']) {
+        $cfg | Add-Member -NotePropertyName Grader -NotePropertyValue ([pscustomobject]@{ InfraRetries = 2 })
+    }
+    elseif (-not $cfg.Grader.PSObject.Properties['InfraRetries']) {
+        $cfg.Grader | Add-Member -NotePropertyName InfraRetries -NotePropertyValue 2
+    }
+    $retries = $cfg.Grader.InfraRetries
+    if ($retries -isnot [int] -and $retries -isnot [long] -or $retries -lt 0) {
+        throw "bench.json: invalid Grader.InfraRetries '$retries' (expected an integer >= 0)"
+    }
+
     $cfg = Expand-ConfigValue $cfg
     $cfg | Add-Member -NotePropertyName RepoRoot -NotePropertyValue $script:RepoRoot
     $cfg

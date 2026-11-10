@@ -4,7 +4,7 @@
 # Results.psm1, Get-BenchProfile and Get-ProfileHash run for real against TestDrive.
 BeforeAll {
     $src = Join-Path $PSScriptRoot '..\src'
-    foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results') {
+    foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results', 'Gold') {
         Import-Module (Join-Path $src "$m.psm1") -Force
     }
     Import-Module (Join-Path $src 'Checks\AlParser.psm1') -Force
@@ -40,12 +40,25 @@ BeforeAll {
         $global:BT.LeakResult = 'clean'
         $global:BT.InstallFails = $false
         $global:BT.Managed = $null
+        $global:BT.HashSuffix = ''
+        $global:BT.GoldCalls = [Collections.Generic.List[object]]::new()
+        $global:BT.GoldFails = @()
+        $global:BT.GoldThrows = $false
+        $global:BT.GoldThrowsLeft = 0
+        $global:BT.Order = [Collections.Generic.List[string]]::new()
+        Mock Get-GoldResult {
+            $global:BT.Order.Add("gold:$($Task.Id)")
+            $global:BT.GoldCalls.Add([pscustomobject]@{ TaskId = $Task.Id; CacheDir = $CacheDir; BcArtifact = $BcArtifact; CompilerVersion = $CompilerVersion; GraderDir = $GraderDir })
+            if ($global:BT.GoldThrowsLeft -gt 0) { $global:BT.GoldThrowsLeft--; throw 'infra: gold grading failed' }
+            if ($global:BT.GoldThrows) { throw 'infra: gold grading failed' }
+            [pscustomobject]@{ FullyRight = ($Task.Id -notin $global:BT.GoldFails); Cached = $false }
+        }
         Mock Get-ManagedSettingsHash { $global:BT.Managed }
 
         Mock Get-BenchConfig { $global:BT.Config }
         Mock Get-BenchTasks {
             $ids = if ($Ids) { $Ids } else { 'T001', 'T002' }
-            foreach ($i in $ids) { [pscustomobject]@{ Id = $i; TimeoutMinutes = $null; TestsDir = 'x' } }
+            foreach ($i in $ids) { [pscustomobject]@{ Id = $i; TimeoutMinutes = $null; TestsDir = 'x'; Hash = "hash-$i$($global:BT.HashSuffix)" } }
         }
         Mock Import-AlParser { 'C:\fake\Microsoft.Dynamics.Nav.CodeAnalysis.dll' }
         Mock Get-AlcPath { 'C:\fake\alc.exe' }
@@ -69,6 +82,7 @@ BeforeAll {
             Join-Path $Workspace.Ws '.claude\settings.json'
         }
         Mock Invoke-ClaudeAttempt {
+            $global:BT.Order.Add('claude')
             $global:BT.ClaudeCalls.Add([pscustomobject]@{
                     Ws = $Ws; Prompt = $Prompt; Model = $Model; MaxTurns = $MaxTurns; TimeoutMinutes = $TimeoutMinutes
                     McpConfigPath = $McpConfigPath; McpMode = $McpMode; ResumeSessionId = $ResumeSessionId; TranscriptPath = $TranscriptPath
@@ -119,6 +133,7 @@ Describe 'Invoke-Bench' {
             Claude   = [pscustomobject]@{ DefaultModel = 'model-default'; MaxTurns = 60; TimeoutMinutes = 30; MaxAttempts = 3 }
             Auth     = [pscustomobject]@{ Mode = 'subscription'; TokenEnvVar = 'X'; ApiKeyEnvVar = 'Y' }
             Paths    = [pscustomobject]@{ AlParserDll = '' }
+            Grader   = [pscustomobject]@{ InfraRetries = 0 }
         }
         New-Profile 'strictp' @{ description = 'strict'; mcpMode = 'strict'; mcpServers = @{ mslearn = @{ type = 'http'; url = 'https://x' } }
             plugins = @(@{ name = 'p1'; marketplace = 'mk'; marketplaceSource = 'rf/mk' })
@@ -177,7 +192,7 @@ Describe 'Invoke-Bench' {
         }
 
         It 'uses the task timeout when set, else the config timeout' {
-            Mock Get-BenchTasks { [pscustomobject]@{ Id = 'T001'; TimeoutMinutes = 7; TestsDir = 'x' }; [pscustomobject]@{ Id = 'T002'; TimeoutMinutes = $null; TestsDir = 'x' } }
+            Mock Get-BenchTasks { [pscustomobject]@{ Id = 'T001'; TimeoutMinutes = 7; TestsDir = 'x'; Hash = 'h1' }; [pscustomobject]@{ Id = 'T002'; TimeoutMinutes = $null; TestsDir = 'x'; Hash = 'h1' } }
             $global:BT.Grades.Enqueue('right'); $global:BT.Grades.Enqueue('right')
             & $script:Bench -Profile strictp -RunId r1 6>$null
             $global:BT.ClaudeCalls.TimeoutMinutes | Should -Be @(7, 30)
@@ -209,6 +224,29 @@ Describe 'Invoke-Bench' {
             $t1.error | Should -BeLike '*container is down*'
             @($t1.attempts).Count | Should -Be 1
             (Get-TaskEntry $run T002).status | Should -Be 'done'
+        }
+
+        It 'retries grading after an infra error without re-invoking Claude' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 2 }
+            $global:BT.Grades.Enqueue('throw'); $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null
+            $t = Get-TaskEntry (Read-Run r1) T001
+            $t.status | Should -Be 'done'
+            @($t.attempts).Count | Should -Be 1
+            $global:BT.GradeCalls.Count | Should -Be 2
+            $global:BT.GradeCalls.Attempt | Should -Be @(1, 1)
+            $global:BT.ClaudeCalls.Count | Should -Be 1
+        }
+
+        It 'aborts as infra only after InfraRetries additional grading failures' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 2 }
+            1..3 | ForEach-Object { $global:BT.Grades.Enqueue('throw') }
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null
+            $t = Get-TaskEntry (Read-Run r1) T001
+            $t.status | Should -Be 'aborted'
+            $t.abortReason | Should -Be 'infra'
+            $global:BT.GradeCalls.Count | Should -Be 3
+            $global:BT.ClaudeCalls.Count | Should -Be 1
         }
 
         It 'marks the task invalid when the transcript leaked' {
@@ -317,6 +355,96 @@ Describe 'Invoke-Bench' {
         }
     }
 
+    Context 'gold preflight' {
+        It 'grades every planned task before the first agent call' {
+            & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null
+            @($global:BT.Order)[0..2] | Should -Be @('gold:T001', 'gold:T002', 'claude')
+            $global:BT.GoldCalls[0].CacheDir | Should -Be (Join-Path $script:Repo 'results\_gold')
+            $global:BT.GoldCalls[0].BcArtifact | Should -Be 'Sandbox/w1/29.0.1.2'
+            $global:BT.GoldCalls[0].GraderDir | Should -Be (Join-Path $script:Temp 'r1\_grader\_gold\T001')
+            $global:BT.GoldCalls[0].CompilerVersion | Should -Be ([string](Read-Run r1).versions.compiler.version)
+        }
+        It 'skips every run of a gold-failed task and still runs the others' {
+            $global:BT.GoldFails = @('T001')
+            $global:BT.Grades.Enqueue('right')
+            $warnings = & $script:Bench -Profile strictp -Tasks T001, T002 -Repeat 2 -RunId r1 6>$null 3>&1
+            @($warnings | Where-Object { $_ -is [System.Management.Automation.WarningRecord] -and $_.Message -like '*T001*' }).Count | Should -BeGreaterThan 0
+            $run = Read-Run r1
+            foreach ($rep in 1, 2) {
+                $t = Get-TaskEntry $run T001 $rep
+                $t.status | Should -Be 'skipped'
+                $t.abortReason | Should -Be 'gold-failed'
+                @($t.attempts).Count | Should -Be 0
+            }
+            (Get-TaskEntry $run T002 1).status | Should -Be 'done'
+            @($global:BT.ClaudeCalls | Where-Object { $_.Ws -like '*\T001\*' }).Count | Should -Be 0
+            $global:BT.ClaudeCalls.Count | Should -BeGreaterThan 0
+        }
+        It 'never calls Get-GoldResult with -SkipPreflight' {
+            $global:BT.GoldFails = @('T001')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 -SkipPreflight 6>$null
+            Should -Invoke Get-GoldResult -Times 0 -Exactly
+            (Get-TaskEntry (Read-Run r1) T001).status | Should -Be 'done'
+        }
+        It 'stops before any agent call when gold grading throws, and marks nothing skipped' {
+            $global:BT.GoldThrows = $true
+            { & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null } | Should -Throw '*gold grading failed*'
+            $global:BT.ClaudeCalls.Count | Should -Be 0
+            @((Read-Run r1).tasks | Where-Object { $_.status -eq 'skipped' }).Count | Should -Be 0
+        }
+        It 'retries a gold grading throw up to InfraRetries times before continuing' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 2 }
+            $global:BT.GoldThrowsLeft = 2
+            $warnings = & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>&1
+            @($warnings | Where-Object { $_ -is [System.Management.Automation.WarningRecord] -and $_.Message -like '*gold preflight T001*retrying*' }).Count | Should -Be 2
+            $global:BT.GoldCalls.Count | Should -Be 3
+            $global:BT.ClaudeCalls.Count | Should -BeGreaterThan 0
+        }
+        It 'stops the run when gold grading still throws after InfraRetries retries' {
+            $global:BT.Config.Grader = [pscustomobject]@{ InfraRetries = 1 }
+            $global:BT.GoldThrows = $true
+            { & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null } | Should -Throw '*gold grading failed*'
+            $global:BT.GoldCalls.Count | Should -Be 2
+            $global:BT.ClaudeCalls.Count | Should -Be 0
+        }
+        It 'keys the gold cache on the current artifact and compiler on -Resume' {
+            $exe = (Get-Process -Id $PID).Path
+            Mock Get-AlcPath { $exe }.GetNewClosure()
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null 3>$null
+            $path = Join-Path $script:Repo 'results\r1\run.json'
+            $j = Get-Content $path -Raw | ConvertFrom-Json -AsHashtable
+            $j.versions.bcArtifact = 'Old/xx/1.0'
+            $j.versions.compiler.version = 'old-version'
+            $j | ConvertTo-Json -Depth 20 | Set-Content $path
+            Set-Mocks
+            Mock Get-AlcPath { $exe }.GetNewClosure()
+            $global:BT.Config.Bc.Version = '30.0.0.1'
+            $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Resume r1 6>$null
+            $global:BT.GoldCalls[0].BcArtifact | Should -Be 'Sandbox/w1/30.0.0.1'
+            $global:BT.GoldCalls[0].CompilerVersion | Should -Be ((Get-Item $exe).VersionInfo.FileVersion)
+        }
+        It 'switches Docker back to linux when the preflight throws' {
+            $global:BT.GoldThrows = $true
+            { & $script:Bench -Profile strictp -Tasks T001 -RunId r1 -SwitchDocker 6>$null } | Should -Throw '*gold grading failed*'
+            $global:BT.DockerCalls | Should -Be @('switch:windows', 'switch:linux')
+        }
+        It 'keeps skipped tasks skipped on -Resume' {
+            $global:BT.GoldFails = @('T001')
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001, T002 -RunId r1 6>$null 3>$null
+            Set-Mocks
+            $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Resume r1 6>$null
+            $run = Read-Run r1
+            (Get-TaskEntry $run T001).status | Should -Be 'skipped'
+            (Get-TaskEntry $run T001).abortReason | Should -Be 'gold-failed'
+            (Get-TaskEntry $run T002).status | Should -Be 'done'
+            $global:BT.GoldCalls.TaskId | Should -Be @('T002')
+        }
+    }
+
     Context '-Resume' {
         It 'runs only pending work and resets an aborted task to attempt 1' {
             $global:BT.Agents.Enqueue('ok'); $global:BT.Agents.Enqueue('aborted')
@@ -348,6 +476,28 @@ Describe 'Invoke-Bench' {
             & $script:Bench -Resume r1 6>$null
             $global:BT.ClaudeCalls[0].Model | Should -Be 'm-x'
             $global:BT.ClaudeCalls[0].McpMode | Should -Be 'open'
+        }
+
+        It 'refuses a pending task whose hash changed since the run started' {
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
+            Set-Mocks
+            $global:BT.HashSuffix = '-edited'
+            { & $script:Bench -Resume r1 6>$null } | Should -Throw "task 'T001' changed since run r1 started"
+            $global:BT.ClaudeCalls.Count | Should -Be 0
+        }
+
+        It 'adds versions.tasks to a run record that has none' {
+            $global:BT.Agents.Enqueue('aborted')
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
+            $path = Join-Path $script:Repo 'results\r1\run.json'
+            $j = Get-Content $path -Raw | ConvertFrom-Json -AsHashtable
+            $j.versions.Remove('tasks')
+            $j | ConvertTo-Json -Depth 20 | Set-Content $path
+            Set-Mocks
+            $global:BT.Grades.Enqueue('right')
+            & $script:Bench -Resume r1 6>$null
+            (Read-Run r1).versions.tasks.T001 | Should -Be 'hash-T001'
         }
 
         It 'refuses a different setting or a changed profile on resume' {
@@ -403,6 +553,11 @@ Describe 'Invoke-Bench' {
             $global:BT.ClaudeCalls[0].Model | Should -Be 'm-x'
             $global:BT.ClaudeCalls[0].MaxTurns | Should -Be 9
             $global:BT.SettingsCalls[0].AllowWeb | Should -BeTrue
+        }
+
+        It 'records the task hashes in versions.tasks' {
+            & $script:Bench -Profile strictp -Tasks T001 -RunId r1 6>$null
+            (Read-Run r1).versions.tasks.T001 | Should -Be 'hash-T001'
         }
 
         It 'records versions, plugins and the MCP allowed list' {

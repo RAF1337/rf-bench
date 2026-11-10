@@ -220,3 +220,47 @@ Measuring whether Claude does better with access to a given MCP server is an exp
   - which servers and tools Claude *actually used*, with call counts per tool per attempt (from `mcp__<server>__<tool>` tool calls in the transcript);
   - plugins installed and their versions.
 - Server and plugin versions go into the run hash, so the report can flag comparisons with different MCP setups.
+
+## 12. Measurement hardening (decided with user 2026-11-10)
+
+Inspired by a review of CentralGauge's methodology (themes and methods only, no content copied). A setup change usually moves results by a few points, so rf-bench must tell a real difference from noise, and must not let a broken task, a broken grader or a cheat move the numbers.
+
+### 12.1 Task fingerprint, split and family
+- Every task gets a content hash: SHA256 over the sorted relative paths and bytes of the whole task folder (assignment and solution). `run.json` records `versions.tasks` (`taskId -> hash`). A resumed run throws when a task's hash changed. The report pairs runs only on tasks with equal hashes and lists the rest in the version banner.
+- `task.json` gains two optional fields: `family` (free text, for example `n-plus-one`; variants of one issue share a family, and the report aggregates per family) and `split` (`dev`, the default, or `holdout`; holdout tasks are not used while tuning profiles and are reported separately).
+
+### 12.2 Reserved object names (anti-cheat)
+- Before compiling, the grader rejects an agent app that declares an object named `Assert`, `Any`, `Library ...` / `Library - ...` or `Test Runner ...` (case-insensitive). Such an object could shadow the test library and make tests pass trivially. The attempt is graded as not compiled, with a compile-error style message naming the agent's file and object, so the agent can fix it.
+
+### 12.3 Test lint
+- A static lint over every task's `solution/tests`, run by `Test-Task.ps1` (also offline with `-LintOnly`) and by the unit suite over all tasks in the repo:
+  - a `[Test]` procedure with no assertion (`Assert.`, `asserterror`, `Error(`);
+  - an `exit` before the first assertion;
+  - nondeterminism: `Random(`, `Randomize(`, `CurrentDateTime`, `Today`, or `Any.` without a seed call (`Any.SetDefaultSeed` / `Any.SetSeed`) in the codeunit.
+- Comments and string literals are ignored.
+
+### 12.4 Infrastructure failures never count against Claude
+- A test run that returns zero results is an infrastructure error, not a failing attempt.
+- On a grading infrastructure error the runner re-grades the same attempt up to `Grader.InfraRetries` times (default 2) before aborting the task run with reason `infra`.
+
+### 12.5 Gold preflight
+- Before the agent loop, the runner grades each selected task's reference solution. A task whose reference is not fully right is not run: its task runs get status `skipped` with reason `gold-failed`. Results are cached under `results/_gold/` by task hash, BC artifact and compiler version, so an unchanged task is not re-graded. `-SkipPreflight` turns it off.
+
+### 12.6 Statistics in the report
+- **Unit:** a task run with status `done`.
+- **Attempt score** per task run: 1 when fully right at attempt 1, 2/3 at attempt 2, 1/3 at attempt 3, else 0. Its mean is "AUC@3". It complements fully-right at 1, within 2 and within 3.
+- **pass^k (consistency):** share of tasks (with at least 2 counted repeats) that are fully right within the attempt limit in every counted repeat.
+- **Paired comparison** of each later run against the first run given (the baseline), over tasks present in both with equal hashes:
+  - per task, the mean attempt score over its counted repeats in each run; the difference per task;
+  - mean difference with a 95% paired bootstrap CI over tasks (10,000 resamples, percentile, seed derived from the paired task ids and hashes, so the report is reproducible);
+  - exact McNemar test on first-attempt fully-right over (task, repeat) pairs, with Holm correction over the compared runs;
+  - verdict: "better" / "worse" when the CI excludes 0, else "no clear difference"; "too few tasks" below 10 paired tasks.
+- **Cost per solved task:** total cost / fully-right task runs.
+- **Failure causes:** distribution of the final attempt's outcome (compile failed, tests failed, budgets failed, checks failed, not graded).
+- Per-family and holdout-only rows for fully-right within 3 and AUC@3.
+- The report also writes `compare.json` next to the HTML with these numbers.
+
+### 12.7 Deferred until the container works
+- A faster test runner (web-service based, instead of `Run-TestsInBcContainer`).
+- Mutation testing of task tests.
+- Parallel containers.

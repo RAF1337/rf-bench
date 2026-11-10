@@ -12,7 +12,9 @@
     Task outcome: 'done' (graded to the end), 'aborted' (Claude timeout / rate limit / no
     result, an attempt without a session id 'no-session', grader infrastructure failure
     'infra', or an unexpected error 'error'; resumable)
-    or 'invalid' (transcript leak, or the leak scan failed).
+    or 'invalid' (transcript leak, or the leak scan failed). Before the first agent call every
+    planned task's reference solution is graded (cached under results/_gold, skip with
+    -SkipPreflight); runs of a task whose reference is not fully right are 'skipped' ('gold-failed').
 
 .EXAMPLE
     pwsh src/Invoke-Bench.ps1 -Profile baseline -Tasks T001,T002 -Repeat 3
@@ -33,13 +35,15 @@ param(
     [string]$Resume,
     [string]$RunId,
     [switch]$KeepWorkspace,
+    # Skip grading the reference solutions before the run (see Get-GoldResult).
+    [switch]$SkipPreflight,
     [string]$ConfigPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results') {
+foreach ($m in 'Config', 'Task', 'Workspace', 'Agent', 'Backend.Docker', 'Grader', 'Feedback', 'LeakScan', 'Results', 'Gold') {
     Import-Module (Join-Path $PSScriptRoot "$m.psm1")
 }
 Import-Module (Join-Path $PSScriptRoot 'Checks\AlParser.psm1')
@@ -137,14 +141,27 @@ function Invoke-TaskRun {
             }
             $sessionId = $agent.SessionId
 
-            try {
-                $grade = Invoke-Grade -Config $Ctx.Config -Task $Task -AgentAppDir (Join-Path $ws.Ws 'app') -GraderDir $ws.GraderDir -Attempt $n
+            # Grading infrastructure can fail independently of the agent's work: retry the grade
+            # for the same attempt (never re-invoking Claude) before giving up as infra.
+            $grade = $null; $gradeError = $null
+            for ($try = 0; $try -le $Ctx.Config.Grader.InfraRetries; $try++) {
+                try {
+                    $grade = Invoke-Grade -Config $Ctx.Config -Task $Task -AgentAppDir (Join-Path $ws.Ws 'app') -GraderDir $ws.GraderDir -Attempt $n
+                    $gradeError = $null
+                    break
+                }
+                catch {
+                    $gradeError = $_.Exception.Message
+                    if ($try -lt $Ctx.Config.Grader.InfraRetries) {
+                        Write-Warning "$taskId/$Rep attempt ${n}: grading failed ($gradeError); retrying ($($try + 1)/$($Ctx.Config.Grader.InfraRetries))"
+                    }
+                }
             }
-            catch {
-                Write-Warning "$taskId/$Rep attempt ${n}: grading failed: $($_.Exception.Message)"
+            if ($null -ne $gradeError) {
+                Write-Warning "$taskId/$Rep attempt ${n}: grading failed: $gradeError"
                 Add-AttemptRecord $record $taskId $Rep $agent $null ''
                 Save-RunRecord $record $Ctx.RunJson
-                $status = 'aborted'; $reason = 'infra'; $errorText = $_.Exception.Message
+                $status = 'aborted'; $reason = 'infra'; $errorText = $gradeError
                 break
             }
 
@@ -277,6 +294,14 @@ else {
 }
 $tasksById = @{}
 foreach ($t in $taskList) { $tasksById[$t.Id] = $t }
+if ($existing) {
+    # Only pending tasks are checked: a finished task keeps the hash it was graded with.
+    $recorded = Get-EntryValue $existing.versions 'tasks'
+    foreach ($t in $taskList) {
+        $old = if ($recorded) { Get-EntryValue $recorded $t.Id }
+        if ($old -and $old -ne $t.Hash) { throw "task '$($t.Id)' changed since run $RunId started" }
+    }
+}
 
 # --- preflight (before any agent call) -----------------------------------------------------------
 
@@ -296,12 +321,23 @@ try {
     if ($existing) {
         $record = $existing
         foreach ($w in $plan) { Reset-TaskEntry (Get-TaskEntry $record $w.TaskId $w.Repeat) }
+        # Runs started before task fingerprints existed get them now.
+        if (-not (Get-EntryValue $record.versions 'tasks')) {
+            $record.versions | Add-Member -NotePropertyName tasks -NotePropertyValue ([pscustomobject][ordered]@{}) -Force
+        }
+        foreach ($t in $taskList) {
+            if ($null -eq (Get-EntryValue $record.versions.tasks $t.Id)) {
+                $record.versions.tasks | Add-Member -NotePropertyName $t.Id -NotePropertyValue $t.Hash -Force
+            }
+        }
     }
     else {
         $mcpVersions = [pscustomobject][ordered]@{}
         foreach ($k in @($harness.McpServers.Keys)) { $mcpVersions | Add-Member -NotePropertyName $k -NotePropertyValue (Get-McpServerHash $harness.McpServers[$k]) }
         $pluginVersions = [pscustomobject][ordered]@{}
         foreach ($pl in @($harness.Plugins)) { $pluginVersions | Add-Member -NotePropertyName "$($pl.Name)@$($pl.Marketplace)" -NotePropertyValue $null -Force }
+        $taskVersions = [pscustomobject][ordered]@{}
+        foreach ($t in $taskList) { $taskVersions | Add-Member -NotePropertyName $t.Id -NotePropertyValue $t.Hash }
         $versions = [pscustomobject][ordered]@{
             cli         = $null
             bcArtifact  = "$($cfg.Bc.ArtifactType)/$($cfg.Bc.Country)/$($cfg.Bc.Version)"
@@ -314,6 +350,8 @@ try {
             plugins         = $pluginVersions
             # SHA256 of the machine's Claude Code managed settings file, null when there is none.
             managedSettings = (Get-ManagedSettingsHash)
+            # taskId -> SHA256 of the whole task folder.
+            tasks           = $taskVersions
         }
         $record = New-RunRecord -RunId $RunId -Profile ([pscustomobject]@{ name = $Profile; hash = $profileHash }) -Model $Model `
             -MaxTurns $MaxTurns -AuthMode $cfg.Auth.Mode -McpMode $harness.McpMode -AllowedMcp @($harness.McpServers.Keys) `
@@ -335,8 +373,41 @@ try {
         BasePrompt  = $basePrompt
     }
 
+    # Gold preflight: a task whose reference solution is not fully right is broken and never given
+    # to Claude. A grading failure throws here, before any agent call, and marks nothing.
+    $skipTasks = @{}
+    if (-not $SkipPreflight) {
+        # Cache key uses the current artifact and compiler (they may differ from the run start on -Resume).
+        $compilerVersion = [string](Get-FileVersion $alc)
+        $bcArtifact = "$($cfg.Bc.ArtifactType)/$($cfg.Bc.Country)/$($cfg.Bc.Version)"
+        foreach ($id in @($plan | ForEach-Object { $_.TaskId } | Select-Object -Unique)) {
+            Write-Host "gold preflight $id ..."
+            $gold = $null
+            for ($try = 0; $try -le $cfg.Grader.InfraRetries; $try++) {
+                try {
+                    $gold = Get-GoldResult -Config $cfg -Task $tasksById[$id] -CacheDir (Join-Path $resultsRoot '_gold') `
+                        -BcArtifact $bcArtifact -CompilerVersion $compilerVersion `
+                        -GraderDir (Join-Path (Get-CanonicalPath $cfg.TempRoot) "$RunId\_grader\_gold\$id")
+                    break
+                }
+                catch {
+                    if ($try -ge $cfg.Grader.InfraRetries) { throw }
+                    Write-Warning "gold preflight ${id}: grading failed ($($_.Exception.Message)); retrying ($($try + 1)/$($cfg.Grader.InfraRetries))"
+                }
+            }
+            if (-not $gold.FullyRight) {
+                Write-Warning "task $id skipped: its reference solution is not fully right (gold-failed)"
+                $skipTasks[$id] = $true
+            }
+        }
+        foreach ($w in @($plan | Where-Object { $skipTasks.ContainsKey($_.TaskId) })) {
+            Set-TaskOutcome $record $w.TaskId $w.Repeat -Status skipped -AbortReason 'gold-failed'
+        }
+        if ($skipTasks.Count) { Save-RunRecord $record $runJson }
+    }
+
     Write-Host "Run ${RunId}: $($plan.Count) task run(s), profile $Profile, model $Model, MCP $($harness.McpMode)"
-    foreach ($w in $plan) {
+    foreach ($w in @($plan | Where-Object { -not $skipTasks.ContainsKey($_.TaskId) })) {
         $task = $tasksById[$w.TaskId]
         Write-Host "$($w.TaskId)/$($w.Repeat)"
         try {

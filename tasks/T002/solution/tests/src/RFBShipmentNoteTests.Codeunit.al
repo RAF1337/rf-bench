@@ -87,7 +87,7 @@ codeunit 70200 "RFB Shipment Note Tests"
         Initialize();
         CreateNote(CustomerBTok, ShipmentNote.Status::Open, 0DT);
         Assert.AreEqual(0, ShipmentNoteMgt.CloseNotesForCustomer(CustomerATok), 'A customer without notes has nothing to close.');
-        CreateNote(CustomerATok, ShipmentNote.Status::Closed, CurrentDateTime());
+        CreateNote(CustomerATok, ShipmentNote.Status::Closed, CreateDateTime(DMY2Date(1, 3, 2025), 100000T));
         Assert.AreEqual(0, ShipmentNoteMgt.CloseNotesForCustomer(CustomerATok), 'A customer with only closed notes has nothing to close.');
     end;
 

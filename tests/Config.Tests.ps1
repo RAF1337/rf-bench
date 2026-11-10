@@ -42,6 +42,18 @@ Describe 'Get-BenchConfig' {
         $p = New-TempConfig { param($c) $c.Claude.Remove('MaxTurns') }
         { Get-BenchConfig -Path $p } | Should -Throw '*missing Claude.MaxTurns*'
     }
+    It 'defaults Grader.InfraRetries to 2 when the Grader section is missing' {
+        $p = New-TempConfig { param($c) $c.Remove('Grader') }
+        (Get-BenchConfig -Path $p).Grader.InfraRetries | Should -Be 2
+    }
+    It 'accepts Grader.InfraRetries = 0' {
+        $p = New-TempConfig { param($c) $c.Grader = @{ InfraRetries = 0 } }
+        (Get-BenchConfig -Path $p).Grader.InfraRetries | Should -Be 0
+    }
+    It 'rejects a negative Grader.InfraRetries' {
+        $p = New-TempConfig { param($c) $c.Grader = @{ InfraRetries = -1 } }
+        { Get-BenchConfig -Path $p } | Should -Throw '*InfraRetries*'
+    }
     It 'rejects unknown auth mode' {
         $p = New-TempConfig { param($c) $c.Auth.Mode = 'foo' }
         { Get-BenchConfig -Path $p } | Should -Throw '*auth.mode*'

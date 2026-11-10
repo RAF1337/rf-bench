@@ -44,6 +44,44 @@ Describe 'Get-BenchTask' {
         $t.AltDir | Should -BeNullOrEmpty
         $t.TimeoutMinutes | Should -BeNullOrEmpty
     }
+    It 'loads family and split from task.json' {
+        $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.family = 'n-plus-one'; $o.split = 'holdout' } }
+        $t = Get-BenchTask $p
+        $t.Family | Should -Be 'n-plus-one'
+        $t.Split | Should -Be 'holdout'
+    }
+    It 'defaults family to null and split to dev' {
+        $t = Get-BenchTask $script:Fixture
+        $t.Family | Should -BeNullOrEmpty
+        $t.Split | Should -Be 'dev'
+    }
+    It 'throws on an invalid split' {
+        $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.split = 'test' } }
+        { Get-BenchTask $p } | Should -Throw "TX01: invalid split 'test'"
+    }
+    It 'throws when family is not a string' {
+        $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.family = 5 } }
+        { Get-BenchTask $p } | Should -Throw 'TX01: family must be a string'
+    }
+    It 'hashes the whole task folder' {
+        $p = New-TaskCopy
+        $h = (Get-BenchTask $p).Hash
+        $h | Should -Match '^[0-9a-f]{64}$'
+        Add-Content (Join-Path $p 'solution\tests\app.json') ' '
+        (Get-BenchTask $p).Hash | Should -Not -Be $h
+    }
+    It 'ignores git-ignored build output when hashing' {
+        $p = New-TaskCopy
+        $h = (Get-BenchTask $p).Hash
+        foreach ($rel in 'assignment\app\.alpackages\x.app', 'solution\app\.vscode\settings.json', 'solution\app\foo.app', 'solution\app\.output\o.txt', 'solution\app\.snapshots\s.bin', 'solution\app\Sub\.ALPackages\y.dll') {
+            $f = Join-Path $p $rel
+            New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null
+            Set-Content $f 'build output'
+        }
+        (Get-BenchTask $p).Hash | Should -Be $h
+        Add-Content (Join-Path $p 'solution\tests\app.json') ' '
+        (Get-BenchTask $p).Hash | Should -Not -Be $h
+    }
     It 'throws on unknown task category' {
         $p = New-TaskCopy { param($t) Set-Json (Join-Path $t 'task.json') { param($o) $o.categories = @('bogus') } }
         { Get-BenchTask $p } | Should -Throw 'TX01: *bogus*'
