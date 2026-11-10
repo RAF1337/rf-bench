@@ -390,6 +390,11 @@ Describe 'Invoke-Bench' {
             $global:BT.ClaudeCalls.Count | Should -Be 0
             @((Read-Run r1).tasks | Where-Object { $_.status -eq 'skipped' }).Count | Should -Be 0
         }
+        It 'switches Docker back to linux when the preflight throws' {
+            $global:BT.GoldThrows = $true
+            { & $script:Bench -Profile strictp -Tasks T001 -RunId r1 -SwitchDocker 6>$null } | Should -Throw '*gold grading failed*'
+            $global:BT.DockerCalls | Should -Be @('switch:windows', 'switch:linux')
+        }
         It 'keeps skipped tasks skipped on -Resume' {
             $global:BT.GoldFails = @('T001')
             $global:BT.Agents.Enqueue('aborted')

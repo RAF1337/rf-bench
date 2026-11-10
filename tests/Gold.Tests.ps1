@@ -72,4 +72,24 @@ Describe 'Get-GoldResult' {
         { Get-Gold $script:Cache } | Should -Throw '*container is down*'
         @(Get-ChildItem $script:Cache -Filter *.json -ErrorAction Ignore).Count | Should -Be 0
     }
+    It 're-grades and overwrites an incomplete cache entry' {
+        New-Item -ItemType Directory $script:Cache -Force | Out-Null
+        Set-Content (& $script:CacheFile $script:Cache) '{}'
+        $r = Get-Gold $script:Cache
+        $r.Cached | Should -BeFalse
+        $script:Calls.Count | Should -Be 1
+        (Get-Gold $script:Cache).Cached | Should -BeTrue
+    }
+    It 're-grades an unreadable cache entry' {
+        New-Item -ItemType Directory $script:Cache -Force | Out-Null
+        Set-Content (& $script:CacheFile $script:Cache) 'not json'
+        (Get-Gold $script:Cache).Cached | Should -BeFalse
+    }
+    It 'neither reads nor writes the cache when the compiler version is empty' {
+        $null = Get-Gold $script:Cache ''
+        $r = Get-Gold $script:Cache ''
+        $r.Cached | Should -BeFalse
+        $script:Calls.Count | Should -Be 2
+        Test-Path $script:Cache | Should -BeFalse
+    }
 }

@@ -15,15 +15,19 @@ function Get-GoldResult {
         [Parameter(Mandatory)][string]$GraderDir
     )
     $file = Join-Path $CacheDir ('{0}-{1}.json' -f $Task.Id, $Task.Hash.Substring(0, 16))
-    if (Test-Path -LiteralPath $file -PathType Leaf) {
-        try { $c = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json } catch { $c = $null }
-        if ($c -and $c.taskHash -ceq $Task.Hash -and $c.bcArtifact -ceq $BcArtifact -and $c.compilerVersion -ceq $CompilerVersion) {
-            return [pscustomobject]@{ FullyRight = [bool]$c.fullyRight; Cached = $true }
+    # Without a compiler version the entry cannot be tied to a compiler: always grade, never cache.
+    $useCache = -not [string]::IsNullOrEmpty($CompilerVersion)
+    if ($useCache -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+        # Unreadable or incomplete entries count as a miss and are overwritten below.
+        try { $c = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json -AsHashtable } catch { $c = $null }
+        if ($c -is [System.Collections.IDictionary] -and $c.Contains('fullyRight') -and $c['taskHash'] -ceq $Task.Hash `            -and $c['bcArtifact'] -ceq $BcArtifact -and $c['compilerVersion'] -ceq $CompilerVersion) {
+            return [pscustomobject]@{ FullyRight = [bool]$c['fullyRight']; Cached = $true }
         }
     }
 
     $grade = Invoke-Grade -Config $Config -Task $Task -AgentAppDir $Task.SolutionAppDir -GraderDir $GraderDir -Attempt 1
     $fullyRight = [bool]$grade.FullyRight
+    if (-not $useCache) { return [pscustomobject]@{ FullyRight = $fullyRight; Cached = $false } }
     if (-not (Test-Path -LiteralPath $CacheDir)) { New-Item -ItemType Directory -Force $CacheDir | Out-Null }
     [pscustomobject][ordered]@{
         taskId          = $Task.Id
