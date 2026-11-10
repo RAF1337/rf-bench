@@ -20,7 +20,7 @@ function Get-GoldResult {
     if ($useCache -and (Test-Path -LiteralPath $file -PathType Leaf)) {
         # Unreadable or incomplete entries count as a miss and are overwritten below.
         try { $c = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json -AsHashtable } catch { $c = $null }
-        if ($c -is [System.Collections.IDictionary] -and $c.Contains('fullyRight') -and $c['taskHash'] -ceq $Task.Hash `            -and $c['bcArtifact'] -ceq $BcArtifact -and $c['compilerVersion'] -ceq $CompilerVersion) {
+        if ($c -is [System.Collections.IDictionary] -and $c.Contains('fullyRight') -and $c['taskHash'] -ceq $Task.Hash -and $c['bcArtifact'] -ceq $BcArtifact -and $c['compilerVersion'] -ceq $CompilerVersion) {
             return [pscustomobject]@{ FullyRight = [bool]$c['fullyRight']; Cached = $true }
         }
     }
