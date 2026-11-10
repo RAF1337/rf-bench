@@ -13,6 +13,16 @@
     that spend is real. Cost is labelled "estimated" when the run used a subscription.
     Analyzer warnings and failed checks come from the last graded attempt of each counted task run.
 
+    Further sections and metrics (all over counted task runs):
+    - Comparison: each run against the first run, paired by task (same task hash only): mean attempt-score difference with 95% bootstrap CI, exact McNemar b/c on first-try success, Holm-adjusted p over all comparisons, and a verdict (better, worse, no clear difference, too few tasks).
+    - AUC@3: mean attempt score, where fully right at attempt k scores (4-k)/3 for k<=3 and 0 otherwise.
+    - pass^k: share of tasks with at least two repeats that were solved in every repeat, with that task count.
+    - Cost per solved task: total cost of all recorded attempts divided by solved task runs.
+    - Failure causes: outcome of the final attempt of each counted task run (compile failed, tests failed, budgets failed, checks failed, fully right).
+    - Families and holdout: fully right within 3 attempts and AUC@3 per task family (tasks/<id>/task.json, default (none)) and over split=holdout tasks.
+    - Skipped (excluded): task runs skipped by the gold preflight.
+    - compare.json next to the HTML holds the per-run metrics and every comparison.
+
 .EXAMPLE
     pwsh src/New-Report.ps1 -Runs 20261104-101500-baseline,20261104-111500-example-rules
 .EXAMPLE
@@ -23,7 +33,9 @@ param(
     # Run ids (folders under -ResultsRoot), run folders or run.json paths. "a,b" is split.
     [Parameter(Mandatory)][string[]]$Runs,
     [string]$Out,
-    [string]$ResultsRoot
+    [string]$ResultsRoot,
+    # Folder with tasks/<id>/task.json (family, split). Default <repo>/tasks; unknown tasks: family (none), split dev.
+    [string]$TasksRoot
 )
 
 Set-StrictMode -Version Latest
@@ -32,6 +44,8 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 if (-not $ResultsRoot) { $ResultsRoot = Join-Path $repoRoot 'results' }
 if (-not $Out) { $Out = Join-Path $ResultsRoot 'report.html' }
+if (-not $TasksRoot) { $TasksRoot = Join-Path $repoRoot 'tasks' }
+Import-Module (Join-Path $PSScriptRoot 'Stats.psm1') -Force
 
 $inv = [Globalization.CultureInfo]::InvariantCulture
 $categories = @('data-access', 'locking-isolation', 'transactions', 'architecture', 'naming-style', 'ui', 'error-handling')
@@ -175,6 +189,7 @@ function Get-RunStats($Run, [int]$Index) {
         AvgAttempts     = $(if ($n) { $attemptSum / $n } else { $null })
         Aborted         = $aborted.Count
         AbortReasons    = $abortReasons
+        Skipped         = @($tasks | Where-Object { $_.status -eq 'skipped' }).Count
         Invalid         = @($tasks | Where-Object { $_.status -eq 'invalid' }).Count
         Pending         = @($tasks | Where-Object { $_.status -eq 'pending' }).Count
         CostTotal       = $cost
@@ -203,6 +218,7 @@ function Get-RunStats($Run, [int]$Index) {
         BcArtifact      = Get-Prop $versions 'bcArtifact'
         Compiler        = $(if ($compiler -is [string]) { $compiler } else { Get-Prop $compiler 'version' })
         McpVersions     = Get-Prop $versions 'mcp'
+        TaskHashes      = Get-Prop $versions 'tasks'
     }
 }
 
@@ -217,6 +233,7 @@ function Get-VersionMismatches($Stats) {
         $v = [ordered]@{ 'Claude CLI' = $s.CliVersion; 'BC artifact' = $s.BcArtifact; 'AL compiler' = $s.Compiler }
         foreach ($p in @(Get-Pairs $s.McpVersions)) { $v["MCP $($p.Name)"] = $p.Value }
         foreach ($p in @(Get-Pairs $s.PluginVersions)) { $v["Plugin $($p.Name)"] = $p.Value }
+        foreach ($p in @(Get-Pairs $s.TaskHashes)) { $v["Task $($p.Name)"] = $p.Value }
         [pscustomobject]@{ Stats = $s; Values = $v }
     }
     $labels = [Collections.Generic.List[string]]::new()
@@ -228,6 +245,48 @@ function Get-VersionMismatches($Stats) {
             })
         if (@($vals.Value | Sort-Object -Unique).Count -gt 1) { [pscustomobject]@{ Label = $label; Values = $vals } }
     }
+}
+
+# --- consistency, causes, families ----------------------------------------------------------------
+
+# family and split of a task from tasks/<id>/task.json (read directly: Task.psm1 needs the parser DLL).
+function Get-TaskMeta([string]$Id) {
+    $family = '(none)'; $split = 'dev'
+    $p = Join-Path (Join-Path $TasksRoot $Id) 'task.json'
+    if (Test-Path -LiteralPath $p -PathType Leaf) {
+        try {
+            $j = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json -Depth 20
+            if (Get-Prop $j 'family') { $family = [string](Get-Prop $j 'family') }
+            if (Get-Prop $j 'split') { $split = [string](Get-Prop $j 'split') }
+        }
+        catch { Write-Warning "unreadable $p ($($_.Exception.Message)); using defaults" }
+    }
+    [pscustomobject]@{ Family = $family; Split = $split }
+}
+
+# Outcome label of the final attempt of every counted task run.
+function Get-FailureCauses($Stat) {
+    $causes = [ordered]@{}
+    foreach ($t in @($Stat.Tasks | Where-Object { $_.status -eq 'done' })) {
+        $last = @(Get-Prop $t 'attempts' | Where-Object { $null -ne $_ }) | Select-Object -Last 1
+        $label = if ($last) { Get-AttemptOutcome $last } else { 'not graded' }
+        $causes[$label] = 1 + $(if ($causes.Contains($label)) { $causes[$label] } else { 0 })
+    }
+    $causes
+}
+
+# Count of fully right within 3 attempts, task runs and mean attempt score over counted task runs of a task set.
+function Get-GroupMetrics($Stat, [scriptblock]$Filter) {
+    $set = @($Stat.Tasks | Where-Object { $_.status -eq 'done' -and (& $Filter ([string]$_.taskId)) })
+    $right = @($set | Where-Object { $null -ne $_.fullyRightAttempt -and [int]$_.fullyRightAttempt -le 3 }).Count
+    $auc = $null
+    if ($set.Count) { $auc = ($set | ForEach-Object { Get-AttemptScore -FullyRightAttempt $_.fullyRightAttempt } | Measure-Object -Average).Average }
+    [pscustomobject]@{ N = $set.Count; Right = $right; Auc = $auc }
+}
+
+function Format-GroupCell($M) {
+    if ($M.N -eq 0) { return 'n/a' }
+    "$(Format-Pct $M.Right $M.N) ($($M.Right)/$($M.N)), AUC@3 $(Format-Num $M.Auc '0.00')"
 }
 
 # --- chart ---------------------------------------------------------------------------------------
@@ -372,6 +431,11 @@ if ($mismatches.Count) {
     }
     $null = $sb.Append('</ul></div>')
 }
+$noHashes = @($stats | Where-Object { $null -eq $_.TaskHashes })
+if ($stats.Count -ge 2 -and $noHashes.Count) {
+    $names = ($noHashes | ForEach-Object { "$(E $_.Profile) ($(E $_.RunId))" }) -join '; '
+    $null = $sb.Append("<div class=""banner"" id=""task-hashes-unknown""><strong>Comparability: task hashes unknown for $names.</strong>Task definitions cannot be verified as identical, so paired comparisons treat those tasks as unverified.</div>")
+}
 
 # Overview charts (the tables below carry every value).
 $null = $sb.Append('<h2>Overview</h2><p class="note">Share of counted task runs (status done). Invalid, aborted and pending task runs are excluded.</p><div class="charts">')
@@ -401,6 +465,7 @@ Add-TableStart $sb 'results' 'Outcomes (percentages over counted task runs)' $st
 Add-Row $sb 'Task runs' $stats 'taskRuns' { param($s) $s.Tasks.Count }
 Add-Row $sb 'Counted (done)' $stats 'counted' { param($s) $s.Counted }
 Add-Row $sb 'Aborted (excluded)' $stats 'aborted' { param($s) if ($s.Aborted) { E "$($s.Aborted) ($($s.AbortReasons -join ', '))" } else { '0' } }
+Add-Row $sb 'Skipped (excluded)' $stats 'skipped' { param($s) $s.Skipped }
 Add-Row $sb 'Invalid (excluded)' $stats 'invalid' { param($s) $s.Invalid }
 Add-Row $sb 'Pending (excluded)' $stats 'pending' { param($s) $s.Pending }
 foreach ($k in 1..3) {
@@ -419,10 +484,76 @@ Add-Row $sb 'Average attempts to fully right' $stats 'avgAttempts' {
 }
 Add-TableEnd $sb
 
+# Comparison against the first run
+$scores = @($stats | ForEach-Object { Get-RunScores -Run $_.Run })
+$comparisons = @()
+if ($stats.Count -ge 2) {
+    $paired = @(for ($i = 1; $i -lt $stats.Count; $i++) { Get-PairedComparison -Baseline $stats[0].Run -Candidate $stats[$i].Run })
+    $holm = Get-HolmAdjusted -P ([double[]]@($paired | ForEach-Object { $_.McNemarP }))
+    $comparisons = @(for ($i = 0; $i -lt $paired.Count; $i++) { [pscustomobject]@{ Candidate = $stats[$i + 1]; Result = $paired[$i]; PHolm = $holm[$i] } })
+
+    $null = $sb.Append("<h2>Comparison</h2><p class=""note"">Each run against the first run ($(E $stats[0].Profile), $(E $stats[0].RunId)), paired by task with the same task hash. Difference is the mean attempt score (AUC@3) with a 95% bootstrap interval; McNemar counts first-try successes only the baseline (b) or only the candidate (c) had; p is Holm-adjusted over all comparisons here. A verdict needs at least 10 paired tasks.</p>")
+    $null = $sb.Append('<div class="tw"><table id="comparison"><caption>Paired comparison against the first run</caption><thead><tr><th scope="col">Candidate</th><th scope="col">Paired tasks</th><th scope="col">Mean difference [95% CI]</th><th scope="col">McNemar b / c</th><th scope="col">p (Holm)</th><th scope="col">Verdict</th><th scope="col">Excluded</th></tr></thead><tbody>')
+    foreach ($c in $comparisons) {
+        $r = $c.Result
+        $diff = if ($null -eq $r.MeanDiff) { 'n/a' } else { "$(Format-Num $r.MeanDiff '+0.000;-0.000;0.000') [$(Format-Num $r.CiLow '+0.000;-0.000;0.000'), $(Format-Num $r.CiHigh '+0.000;-0.000;0.000')]" }
+        $excl = if (@($r.ExcludedTasks).Count) { E (@($r.ExcludedTasks) -join ', ') } else { 'none' }
+        $null = $sb.Append("<tr data-candidate=""$($c.Candidate.Index)""><th scope=""row"">$(E $c.Candidate.Profile)<br><span class=""muted"">$(E $c.Candidate.RunId)</span></th><td data-metric=""paired"">$($r.PairedTasks)</td><td data-metric=""diff"">$diff</td><td data-metric=""mcnemar"">$($r.McNemarB) / $($r.McNemarC)</td><td data-metric=""pHolm"">$(Format-Num $c.PHolm '0.000')</td><td data-metric=""verdict""><strong>$(E $r.Verdict)</strong></td><td data-metric=""excluded"">$excl</td></tr>")
+    }
+    $null = $sb.Append('</tbody></table></div>')
+}
+
+# Consistency
+$estimated = { param($s, $text) if ($s.Estimated -and $text -ne 'n/a') { "$text <span class=""tag"">estimated</span>" } else { $text } }
+$null = $sb.Append('<h2>Consistency</h2><p class="note">AUC@3 is the mean attempt score (fully right at attempt k scores (4-k)/3, otherwise 0). pass^k needs tasks with at least two repeats. Cost per solved task divides all recorded cost by solved task runs.</p>')
+Add-TableStart $sb 'consistency' 'AUC@3, pass^k and cost per solved task' $stats
+Add-Row $sb 'AUC@3' $stats 'auc3' { param($s) Format-Num $scores[$s.Index].Auc3 '0.000' }
+Add-Row $sb 'pass^k' $stats 'passHatK' {
+    param($s)
+    $sc = $scores[$s.Index]
+    if ($null -eq $sc.PassHatK) { 'n/a' } else { "$(Format-Pct ($sc.PassHatK * $sc.PassHatKTasks) $sc.PassHatKTasks) <span class=""tag"">$($sc.PassHatKTasks) tasks</span>" }
+}
+Add-Row $sb 'Cost per solved task' $stats 'costPerSolved' {
+    param($s)
+    $v = $scores[$s.Index].CostPerSolved
+    & $estimated $s $(if ($null -ne $v) { (Format-Num $v 'N2') + ' USD' } else { 'n/a' })
+}
+Add-TableEnd $sb
+
+# Failure causes
+$causes = @($stats | ForEach-Object { , (Get-FailureCauses $_) })
+$null = $sb.Append('<h2>Failure causes</h2><p class="note">Outcome of the final attempt of each counted task run.</p>')
+Add-TableStart $sb 'failure-causes' 'Final-attempt outcomes' $stats 'Outcome'
+$labels = @($causes | ForEach-Object { $_.Keys } | Sort-Object -Unique | Sort-Object { if ($_ -eq 'fully right') { 1 } else { 0 } }, { $_ })
+foreach ($l in $labels) {
+    Add-Row $sb (E $l) $stats "cause:$l" { param($s) $cs = $causes[$s.Index]; if ($cs.Contains($l)) { $cs[$l] } else { 0 } }
+}
+if (-not $labels.Count) { Add-Row $sb 'No counted task runs' $stats 'cause:none' { param($s) '0' } }
+Add-TableEnd $sb
+
+# Families and holdout
+$allIds = @($stats | ForEach-Object { $_.Tasks } | ForEach-Object { [string]$_.taskId } | Sort-Object -Unique)
+$meta = @{}
+foreach ($id in $allIds) { $meta[$id] = Get-TaskMeta $id }
+$families = @($allIds | ForEach-Object { $meta[$_].Family } | Sort-Object -Unique)
+$null = $sb.Append('<h2>Families</h2><p class="note">Fully right within 3 attempts and AUC@3 per task family, over counted task runs. Tasks without a family are listed under (none).</p>')
+Add-TableStart $sb 'families' 'Per task family' $stats 'Family'
+foreach ($f in $families) {
+    Add-Row $sb (E $f) $stats "family:$f" { param($s) Format-GroupCell (Get-GroupMetrics $s { param($id) $meta[$id].Family -ceq $f }) }
+}
+if (-not $families.Count) { Add-Row $sb 'No tasks' $stats 'family:none' { param($s) 'n/a' } }
+Add-TableEnd $sb
+
+if (@($allIds | Where-Object { $meta[$_].Split -eq 'holdout' }).Count) {
+    $null = $sb.Append('<h2>Holdout</h2><p class="note">Same metrics over tasks with split holdout only.</p>')
+    Add-TableStart $sb 'holdout' 'Holdout tasks' $stats
+    Add-Row $sb 'Fully right within 3, AUC@3' $stats 'holdout' { param($s) Format-GroupCell (Get-GroupMetrics $s { param($id) $meta[$id].Split -eq 'holdout' }) }
+    Add-TableEnd $sb
+}
+
 # Cost and usage
 $null = $sb.Append('<h2>Cost and usage</h2><p class="note">Totals include every recorded attempt, also of aborted and invalid task runs. Means are per counted task run. Cost is estimated by Claude Code when the run used a subscription.</p>')
 Add-TableStart $sb 'usage' 'Cost, tokens, time and turns' $stats
-$estimated = { param($s, $text) if ($s.Estimated -and $text -ne 'n/a') { "$text <span class=""tag"">estimated</span>" } else { $text } }
 Add-Row $sb 'Cost total' $stats 'costTotal' { param($s) & $estimated $s $(if ($null -ne $s.CostTotal) { (Format-Num $s.CostTotal 'N2') + ' USD' } else { 'n/a' }) }
 Add-Row $sb 'Cost per task run' $stats 'costPerTask' { param($s) & $estimated $s $(if ($null -ne $s.CostMean) { (Format-Num $s.CostMean 'N2') + ' USD' } else { 'n/a' }) }
 Add-Row $sb 'Input tokens' $stats 'inputTokens' { param($s) Format-Num $s.InputTokens }
@@ -507,4 +638,25 @@ $null = $sb.Append('</main></body></html>')
 $outDir = Split-Path $Out -Parent
 if ($outDir -and -not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Force $outDir | Out-Null }
 Set-Content -LiteralPath $Out -Value $sb.ToString() -Encoding utf8NoBOM -NoNewline
+
+$compare = [ordered]@{
+    runs        = @(for ($i = 0; $i -lt $stats.Count; $i++) {
+            [ordered]@{
+                runId = $stats[$i].RunId; auc3 = $scores[$i].Auc3; passHatK = $scores[$i].PassHatK
+                passHatKTasks = $scores[$i].PassHatKTasks; costPerSolved = $scores[$i].CostPerSolved
+                failureCauses = $causes[$i]
+            }
+        })
+    comparisons = @(foreach ($c in $comparisons) {
+            $r = $c.Result
+            [ordered]@{
+                baseline = $stats[0].RunId; candidate = $c.Candidate.RunId; pairedTasks = $r.PairedTasks
+                meanDiff = $r.MeanDiff; ciLow = $r.CiLow; ciHigh = $r.CiHigh
+                mcnemarB = $r.McNemarB; mcnemarC = $r.McNemarC; p = $r.McNemarP; pHolm = $c.PHolm
+                verdict = $r.Verdict; excluded = @($r.ExcludedTasks)
+            }
+        })
+}
+$compareJson = Join-Path (Split-Path ([IO.Path]::GetFullPath($Out)) -Parent) 'compare.json'
+Set-Content -LiteralPath $compareJson -Value ($compare | ConvertTo-Json -Depth 6) -Encoding utf8NoBOM
 (Resolve-Path -LiteralPath $Out).Path

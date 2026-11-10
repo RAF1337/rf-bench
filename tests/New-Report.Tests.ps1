@@ -191,3 +191,99 @@ Describe 'New-Report' {
         Get-Cell $h 0 'aborted' | Should -Be '4 (rate-limit 4)'
     }
 }
+
+Describe 'New-Report comparison and consistency' {
+    BeforeAll {
+        $script:Hashes = { param($j) $j.versions | Add-Member -NotePropertyName tasks -NotePropertyValue ([pscustomobject]@{ T001 = 'h1'; T002 = 'h2'; T003 = 'h3'; T004 = 'h4' }) -Force }
+        $script:AH = Copy-Fixture $script:A $script:Hashes
+        $script:BH = Copy-Fixture $script:B $script:Hashes
+
+        function Invoke-ReportFull([string[]]$Runs, [string]$TasksRoot) {
+            $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $out = Join-Path $dir 'report.html'
+            $params = @{ Runs = $Runs; Out = $out }
+            if ($TasksRoot) { $params.TasksRoot = $TasksRoot }
+            $null = & $script:Report @params
+            [pscustomobject]@{ Html = (Get-Content -LiteralPath $out -Raw); Dir = $dir }
+        }
+        function Get-Section([string]$Html, [string]$Id) {
+            $m = [regex]::Match($Html, "<table id=""$Id"".*?</table>", 'Singleline')
+            if ($m.Success) { ($m.Value -replace '<[^>]+>', ' ' -replace '\s+', ' ') } else { $null }
+        }
+    }
+
+    It 'shows one comparison row per candidate with verdict, CI and McNemar counts, and writes compare.json' {
+        $r = Invoke-ReportFull @($script:AH, $script:BH)
+        $sec = Get-Section $r.Html 'comparison'
+        $sec | Should -Not -BeNullOrEmpty
+        $sec | Should -Match 'too few tasks'
+        $sec | Should -Match '\[.*,.*\]'
+        $json = Get-Content -LiteralPath (Join-Path $r.Dir 'compare.json') -Raw | ConvertFrom-Json
+        @($json.runs).Count | Should -Be 2
+        @($json.comparisons).Count | Should -Be 1
+        $c = $json.comparisons[0]
+        $c.pairedTasks | Should -Be 2
+        $c.verdict | Should -Be 'too few tasks'
+        $c.baseline | Should -Be (Get-Content $script:A -Raw | ConvertFrom-Json).runId
+        $c.pHolm | Should -BeGreaterOrEqual $c.p
+        $json.runs[1].auc3 | Should -BeGreaterThan 0
+        # run-b: T001 right at 2 (2/3), T002 right at 3 (1/3), T003 right at 1 (1) -> mean 2/3
+        $json.runs[1].auc3 | Should -BeLessThan 0.67
+        $json.runs[1].auc3 | Should -BeGreaterThan 0.66
+        $sec | Should -Match 'T003 \(missing\)'
+    }
+
+    It 'has no comparison section for a single run but still writes compare.json' {
+        $r = Invoke-ReportFull @($script:AH)
+        $r.Html | Should -Not -Match 'id="comparison"'
+        $r.Html | Should -Match 'id="consistency"'
+        $json = Get-Content -LiteralPath (Join-Path $r.Dir 'compare.json') -Raw | ConvertFrom-Json
+        @($json.comparisons).Count | Should -Be 0
+    }
+
+    It 'counts final-attempt failure causes per run' {
+        $r = Invoke-ReportFull @($script:A)
+        $sec = Get-Section $r.Html 'failure-causes'
+        $sec | Should -Match 'checks failed 1'
+        $json = Get-Content -LiteralPath (Join-Path $r.Dir 'compare.json') -Raw | ConvertFrom-Json
+        # run-a done runs: T001 fully right, T002 final attempt checks failed.
+        $json.runs[0].failureCauses.'fully right' | Should -Be 1
+        $json.runs[0].failureCauses.'checks failed' | Should -Be 1
+    }
+
+    It 'groups by family from the task folder and under (none) otherwise' {
+        $tr = Join-Path $TestDrive 'tasks'
+        New-Item -ItemType Directory (Join-Path $tr 'T001') -Force | Out-Null
+        '{ "id": "T001", "family": "locking" }' | Set-Content (Join-Path $tr 'T001\task.json')
+        $r = Invoke-ReportFull @($script:AH) $tr
+        $sec = Get-Section $r.Html 'families'
+        $sec | Should -Match 'locking'
+        $sec | Should -Match '\(none\)'
+        $r.Html | Should -Not -Match 'id="holdout"'
+    }
+
+    It 'shows the holdout section only when a holdout task exists' {
+        $tr = Join-Path $TestDrive 'tasks2'
+        New-Item -ItemType Directory (Join-Path $tr 'T002') -Force | Out-Null
+        '{ "id": "T002", "split": "holdout" }' | Set-Content (Join-Path $tr 'T002\task.json')
+        $r = Invoke-ReportFull @($script:AH) $tr
+        Get-Section $r.Html 'holdout' | Should -Not -BeNullOrEmpty
+    }
+
+    It 'shows the skipped count in the Runs table' {
+        $sk = Copy-Fixture $script:A { param($j) $j.tasks[0].status = 'skipped'; $j.tasks[0].abortReason = 'gold-failed' }
+        Get-Cell (Invoke-Report @($sk)) 0 'skipped' | Should -Match '^1'
+    }
+
+    It 'renders an old-format run without versions.tasks and says task hashes are unknown' {
+        $h = Invoke-Report @($script:A, $script:B)
+        $h | Should -Match 'task hashes unknown'
+    }
+
+    It 'lists tasks whose hashes differ between runs in the banner' {
+        $b2 = Copy-Fixture $script:BH { param($j) $j.versions.tasks.T002 = 'changed' }
+        $h = Invoke-Report @($script:AH, $b2)
+        $h | Should -Match 'id="version-mismatch"'
+        $h | Should -Match 'Task T002'
+    }
+}
